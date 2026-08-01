@@ -51,13 +51,13 @@ create table if not exists public.cards (
   )
 );
 
+alter table public.cards
+add column if not exists assignee_member_id uuid;
+
 create index if not exists lists_board_id_idx on public.lists(board_id);
 create index if not exists cards_list_id_idx on public.cards(list_id);
 create index if not exists board_members_member_id_idx on public.board_members(member_id);
 create index if not exists cards_assignee_member_id_idx on public.cards(assignee_member_id);
-
-alter table public.cards
-add column if not exists assignee_member_id uuid;
 
 do $$
 begin

@@ -32,6 +32,8 @@ All notable changes to this project are documented here.
   and `cards.assignee_member_id`.
 - Added idempotent migration SQL to backfill the new auth/member schema on
   already-deployed Supabase projects.
+- Fixed migration order in `supabase/schema.sql` so `assignee_member_id` column
+  is created before index creation, preventing `column does not exist` errors.
 - Popup/modal task-detail editor for create/update task flows.
 
 ### Changed
