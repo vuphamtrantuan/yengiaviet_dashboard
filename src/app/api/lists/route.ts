@@ -1,22 +1,17 @@
 import { NextResponse } from "next/server";
 import { nextPosition } from "@/lib/board";
-import {
-  getSupabaseEnvErrorMessage,
-  getSupabaseServerClient,
-  toListDTO,
-} from "@/lib/supabase";
+import { toListDTO } from "@/lib/supabase";
+import { ensureBoardMembership, requireSupabaseAndMember } from "@/lib/server-auth";
 
 export const dynamic = "force-dynamic";
 
 export async function POST(request: Request) {
-  const supabase = getSupabaseServerClient();
-  if (!supabase) {
-    return NextResponse.json(
-      { error: getSupabaseEnvErrorMessage() },
-      { status: 500 }
-    );
+  const authContext = await requireSupabaseAndMember();
+  if ("errorResponse" in authContext) {
+    return authContext.errorResponse;
   }
 
+  const { supabase, member } = authContext;
   const body = await request.json().catch(() => ({}));
   const boardId = typeof body.boardId === "string" ? body.boardId : "";
   const title = typeof body.title === "string" ? body.title.trim() : "";
@@ -26,6 +21,15 @@ export async function POST(request: Request) {
       { error: "boardId và title là bắt buộc." },
       { status: 400 }
     );
+  }
+
+  const boardMembershipError = await ensureBoardMembership({
+    supabase,
+    boardId,
+    memberId: member.id,
+  });
+  if (boardMembershipError) {
+    return boardMembershipError;
   }
 
   const { data: existingLists, error: existingError } = await supabase

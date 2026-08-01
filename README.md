@@ -53,9 +53,10 @@ npm run dev
 ## Data model
 
 - **Board** → has many **Lists** → each has many **Cards**.
+- **Members** join boards via `board_members` and can be assigned to tasks.
 - Cards and lists are ordered by an integer `position`; drag-and-drop recomputes
   dense sequential positions on the server (see `src/lib/board.ts`).
-- Card details include `assignee`, `start_date`, and `due_date`.
+- Card details include `assignee_member_id`, `start_date`, and `due_date`.
 
 ## API routes
 
@@ -68,6 +69,17 @@ npm run dev
 | `POST` | `/api/cards` | Create a card |
 | `PATCH/DELETE` | `/api/cards/:id` | Edit / delete a card |
 | `PATCH` | `/api/cards/:id/move` | Move a card between/within lists |
+| `POST` | `/api/auth/login` | Email-only login (no password) |
+| `GET` | `/api/auth/session` | Current login session |
+| `POST` | `/api/auth/logout` | Logout current session |
+| `GET/POST` | `/api/boards/:id/members` | List/invite board members by email |
+
+## Authentication and members
+
+- Every user logs in with email only (no password) to use boards.
+- A board only shows to members listed in `board_members`.
+- Task assignee is selected from board members, not free-text input.
+- Task details are edited in a pop-up modal for better visibility.
 
 ## Deploy to Vercel
 
@@ -77,6 +89,7 @@ npm run dev
    - `SUPABASE_URL`
    - `SUPABASE_SERVICE_ROLE_KEY`
 4. Ensure `supabase/schema.sql` has been applied in your Supabase project.
+   - If you applied an earlier version already, run the updated script again (it is idempotent and adds member/auth-assignment tables/columns).
 5. Deploy.
 
 The project is a standard Next.js 14 app, so no custom Vercel runtime config is required.

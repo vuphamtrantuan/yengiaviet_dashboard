@@ -1,9 +1,6 @@
 import { NextResponse } from "next/server";
 import { computeMove } from "@/lib/board";
-import {
-  getSupabaseEnvErrorMessage,
-  getSupabaseServerClient,
-} from "@/lib/supabase";
+import { ensureBoardMembership, requireSupabaseAndMember } from "@/lib/server-auth";
 
 export const dynamic = "force-dynamic";
 
@@ -15,14 +12,12 @@ export async function PATCH(
   request: Request,
   { params }: { params: { cardId: string } }
 ) {
-  const supabase = getSupabaseServerClient();
-  if (!supabase) {
-    return NextResponse.json(
-      { error: getSupabaseEnvErrorMessage() },
-      { status: 500 }
-    );
+  const authContext = await requireSupabaseAndMember();
+  if ("errorResponse" in authContext) {
+    return authContext.errorResponse;
   }
 
+  const { supabase, member } = authContext;
   const body = await request.json().catch(() => ({}));
   const destListId = typeof body.destListId === "string" ? body.destListId : "";
   const destIndex =
@@ -40,6 +35,48 @@ export async function PATCH(
 
   if (cardError || !card) {
     return NextResponse.json({ error: "Không tìm thấy thẻ công việc." }, { status: 404 });
+  }
+
+  const { data: sourceList, error: sourceListError } = await supabase
+    .from("lists")
+    .select("id, board_id")
+    .eq("id", card.list_id)
+    .single();
+
+  if (sourceListError || !sourceList) {
+    return NextResponse.json(
+      { error: "Không thể xác định danh sách nguồn." },
+      { status: 500 }
+    );
+  }
+
+  const { data: destinationList, error: destinationListError } = await supabase
+    .from("lists")
+    .select("id, board_id")
+    .eq("id", destListId)
+    .single();
+
+  if (destinationListError || !destinationList) {
+    return NextResponse.json(
+      { error: "Không tìm thấy danh sách đích." },
+      { status: 404 }
+    );
+  }
+
+  if (sourceList.board_id !== destinationList.board_id) {
+    return NextResponse.json(
+      { error: "Không thể di chuyển thẻ giữa hai bảng khác nhau." },
+      { status: 400 }
+    );
+  }
+
+  const boardMembershipError = await ensureBoardMembership({
+    supabase,
+    boardId: sourceList.board_id,
+    memberId: member.id,
+  });
+  if (boardMembershipError) {
+    return boardMembershipError;
   }
 
   const sourceListId = card.list_id;

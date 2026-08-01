@@ -1,5 +1,11 @@
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
-import type { BoardDTO, BoardSummary, CardDTO, ListDTO } from "@/lib/types";
+import type {
+  BoardDTO,
+  BoardSummary,
+  CardDTO,
+  ListDTO,
+  MemberDTO,
+} from "@/lib/types";
 
 export interface BoardRow {
   id: string;
@@ -21,13 +27,26 @@ export interface CardRow {
   id: string;
   title: string;
   description: string | null;
-  assignee: string | null;
+  assignee_member_id: string | null;
   start_date: string | null;
   due_date: string | null;
   position: number;
   list_id: string;
   created_at: string;
   updated_at: string;
+}
+
+export interface MemberRow {
+  id: string;
+  email: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface BoardMemberRow {
+  board_id: string;
+  member_id: string;
+  created_at: string;
 }
 
 function isPlaceholderValue(value: string, placeholders: string[]): boolean {
@@ -65,16 +84,31 @@ export function getSupabaseEnvErrorMessage(): string {
   return "Thiếu cấu hình SUPABASE_URL hoặc SUPABASE_SERVICE_ROLE_KEY.";
 }
 
-export function toCardDTO(card: CardRow): CardDTO {
+export function toCardDTO(
+  card: CardRow,
+  memberEmailById?: Map<string, string>
+): CardDTO {
+  const assigneeMemberId = card.assignee_member_id;
+
   return {
     id: card.id,
     title: card.title,
     description: card.description,
-    assignee: card.assignee,
+    assigneeMemberId,
+    assigneeMemberEmail: assigneeMemberId
+      ? memberEmailById?.get(assigneeMemberId) ?? null
+      : null,
     startDate: card.start_date,
     dueDate: card.due_date,
     position: card.position,
     listId: card.list_id,
+  };
+}
+
+export function toMemberDTO(member: MemberRow): MemberDTO {
+  return {
+    id: member.id,
+    email: member.email,
   };
 }
 
@@ -108,12 +142,14 @@ export function toBoardSummary(params: {
 export function toBoardDTO(params: {
   board: BoardRow;
   lists: ListDTO[];
+  members: MemberDTO[];
 }): BoardDTO {
-  const { board, lists } = params;
+  const { board, lists, members } = params;
   return {
     id: board.id,
     title: board.title,
     createdAt: board.created_at,
     lists,
+    members,
   };
 }

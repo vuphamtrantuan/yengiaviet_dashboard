@@ -1,10 +1,10 @@
 import { NextResponse } from "next/server";
 import { nextPosition } from "@/lib/board";
 import {
-  getSupabaseEnvErrorMessage,
-  getSupabaseServerClient,
+  type MemberRow,
   toCardDTO,
 } from "@/lib/supabase";
+import { ensureBoardMembership, requireSupabaseAndMember } from "@/lib/server-auth";
 
 export const dynamic = "force-dynamic";
 
@@ -32,19 +32,20 @@ function normalizeOptionalDate(value: unknown): string | null {
 }
 
 export async function POST(request: Request) {
-  const supabase = getSupabaseServerClient();
-  if (!supabase) {
-    return NextResponse.json(
-      { error: getSupabaseEnvErrorMessage() },
-      { status: 500 }
-    );
+  const authContext = await requireSupabaseAndMember();
+  if ("errorResponse" in authContext) {
+    return authContext.errorResponse;
   }
 
+  const { supabase, member } = authContext;
   const body = await request.json().catch(() => ({}));
   const listId = typeof body.listId === "string" ? body.listId : "";
   const title = typeof body.title === "string" ? body.title.trim() : "";
   const description = normalizeOptionalText(body.description);
-  const assignee = normalizeOptionalText(body.assignee);
+  const assigneeMemberId =
+    typeof body.assigneeMemberId === "string" && body.assigneeMemberId.trim()
+      ? body.assigneeMemberId
+      : null;
   const startDate = normalizeOptionalDate(body.startDate);
   const dueDate = normalizeOptionalDate(body.dueDate);
 
@@ -76,6 +77,39 @@ export async function POST(request: Request) {
     );
   }
 
+  const { data: list, error: listError } = await supabase
+    .from("lists")
+    .select("id, board_id")
+    .eq("id", listId)
+    .single();
+
+  if (listError || !list) {
+    return NextResponse.json({ error: "Không tìm thấy danh sách." }, { status: 404 });
+  }
+
+  const boardMembershipError = await ensureBoardMembership({
+    supabase,
+    boardId: list.board_id,
+    memberId: member.id,
+  });
+  if (boardMembershipError) {
+    return boardMembershipError;
+  }
+
+  if (assigneeMemberId) {
+    const assigneeMembershipError = await ensureBoardMembership({
+      supabase,
+      boardId: list.board_id,
+      memberId: assigneeMemberId,
+    });
+    if (assigneeMembershipError) {
+      return NextResponse.json(
+        { error: "Người được giao việc chưa thuộc bảng này." },
+        { status: 400 }
+      );
+    }
+  }
+
   const { data: existingCards, error: existingError } = await supabase
     .from("cards")
     .select("position")
@@ -90,14 +124,14 @@ export async function POST(request: Request) {
     .insert({
       title,
       description,
-      assignee,
+      assignee_member_id: assigneeMemberId,
       start_date: startDate,
       due_date: dueDate,
       list_id: listId,
       position: nextPosition(existingCards.map((card) => card.position)),
     })
     .select(
-      "id, title, description, assignee, start_date, due_date, position, list_id, created_at, updated_at"
+      "id, title, description, assignee_member_id, start_date, due_date, position, list_id, created_at, updated_at"
     )
     .single();
 
@@ -108,5 +142,18 @@ export async function POST(request: Request) {
     );
   }
 
-  return NextResponse.json(toCardDTO(card), { status: 201 });
+  const memberEmailById = new Map<string, string>();
+  if (assigneeMemberId) {
+    const { data: assigneeMember, error: assigneeError } = await supabase
+      .from("members")
+      .select("id, email, created_at, updated_at")
+      .eq("id", assigneeMemberId)
+      .single();
+
+    if (!assigneeError && assigneeMember) {
+      memberEmailById.set(assigneeMember.id, (assigneeMember as MemberRow).email);
+    }
+  }
+
+  return NextResponse.json(toCardDTO(card, memberEmailById), { status: 201 });
 }

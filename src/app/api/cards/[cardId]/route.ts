@@ -1,9 +1,9 @@
 import { NextResponse } from "next/server";
 import {
-  getSupabaseEnvErrorMessage,
-  getSupabaseServerClient,
+  type MemberRow,
   toCardDTO,
 } from "@/lib/supabase";
+import { ensureBoardMembership, requireSupabaseAndMember } from "@/lib/server-auth";
 
 export const dynamic = "force-dynamic";
 
@@ -34,18 +34,16 @@ export async function PATCH(
   request: Request,
   { params }: { params: { cardId: string } }
 ) {
-  const supabase = getSupabaseServerClient();
-  if (!supabase) {
-    return NextResponse.json(
-      { error: getSupabaseEnvErrorMessage() },
-      { status: 500 }
-    );
+  const authContext = await requireSupabaseAndMember();
+  if ("errorResponse" in authContext) {
+    return authContext.errorResponse;
   }
 
+  const { supabase, member } = authContext;
   const body = await request.json().catch(() => ({}));
   const { data: existingCard, error: existingCardError } = await supabase
     .from("cards")
-    .select("id, start_date, due_date")
+    .select("id, list_id, start_date, due_date, assignee_member_id")
     .eq("id", params.cardId)
     .single();
 
@@ -53,10 +51,32 @@ export async function PATCH(
     return NextResponse.json({ error: "Không tìm thấy thẻ công việc." }, { status: 404 });
   }
 
+  const { data: sourceList, error: sourceListError } = await supabase
+    .from("lists")
+    .select("id, board_id")
+    .eq("id", existingCard.list_id)
+    .single();
+
+  if (sourceListError || !sourceList) {
+    return NextResponse.json(
+      { error: "Không thể xác định danh sách của thẻ công việc." },
+      { status: 500 }
+    );
+  }
+
+  const boardMembershipError = await ensureBoardMembership({
+    supabase,
+    boardId: sourceList.board_id,
+    memberId: member.id,
+  });
+  if (boardMembershipError) {
+    return boardMembershipError;
+  }
+
   const data: {
     title?: string;
     description?: string | null;
-    assignee?: string | null;
+    assignee_member_id?: string | null;
     start_date?: string | null;
     due_date?: string | null;
   } = {};
@@ -73,8 +93,28 @@ export async function PATCH(
     data.description = normalizeOptionalText(body.description);
   }
 
-  if ("assignee" in body) {
-    data.assignee = normalizeOptionalText(body.assignee);
+  if ("assigneeMemberId" in body) {
+    if (body.assigneeMemberId === null || body.assigneeMemberId === "") {
+      data.assignee_member_id = null;
+    } else if (typeof body.assigneeMemberId === "string") {
+      const assigneeMembershipError = await ensureBoardMembership({
+        supabase,
+        boardId: sourceList.board_id,
+        memberId: body.assigneeMemberId,
+      });
+      if (assigneeMembershipError) {
+        return NextResponse.json(
+          { error: "Người được giao việc chưa thuộc bảng này." },
+          { status: 400 }
+        );
+      }
+      data.assignee_member_id = body.assigneeMemberId;
+    } else {
+      return NextResponse.json(
+        { error: "assigneeMemberId không hợp lệ." },
+        { status: 400 }
+      );
+    }
   }
 
   const parsedStartDate = normalizeOptionalDate(body.startDate);
@@ -123,7 +163,7 @@ export async function PATCH(
     .update(data)
     .eq("id", params.cardId)
     .select(
-      "id, title, description, assignee, start_date, due_date, position, list_id, created_at, updated_at"
+      "id, title, description, assignee_member_id, start_date, due_date, position, list_id, created_at, updated_at"
     )
     .single();
 
@@ -134,19 +174,62 @@ export async function PATCH(
     );
   }
 
-  return NextResponse.json(toCardDTO(card));
+  const memberEmailById = new Map<string, string>();
+  const assigneeId = card.assignee_member_id;
+  if (assigneeId) {
+    const { data: assigneeMember, error: assigneeError } = await supabase
+      .from("members")
+      .select("id, email, created_at, updated_at")
+      .eq("id", assigneeId)
+      .single();
+    if (!assigneeError && assigneeMember) {
+      memberEmailById.set(assigneeId, (assigneeMember as MemberRow).email);
+    }
+  }
+
+  return NextResponse.json(toCardDTO(card, memberEmailById));
 }
 
 export async function DELETE(
   _request: Request,
   { params }: { params: { cardId: string } }
 ) {
-  const supabase = getSupabaseServerClient();
-  if (!supabase) {
+  const authContext = await requireSupabaseAndMember();
+  if ("errorResponse" in authContext) {
+    return authContext.errorResponse;
+  }
+
+  const { supabase, member } = authContext;
+  const { data: existingCard, error: existingCardError } = await supabase
+    .from("cards")
+    .select("id, list_id")
+    .eq("id", params.cardId)
+    .single();
+
+  if (existingCardError || !existingCard) {
+    return NextResponse.json({ error: "Không tìm thấy thẻ công việc." }, { status: 404 });
+  }
+
+  const { data: sourceList, error: sourceListError } = await supabase
+    .from("lists")
+    .select("id, board_id")
+    .eq("id", existingCard.list_id)
+    .single();
+
+  if (sourceListError || !sourceList) {
     return NextResponse.json(
-      { error: getSupabaseEnvErrorMessage() },
+      { error: "Không thể xác định danh sách của thẻ công việc." },
       { status: 500 }
     );
+  }
+
+  const boardMembershipError = await ensureBoardMembership({
+    supabase,
+    boardId: sourceList.board_id,
+    memberId: member.id,
+  });
+  if (boardMembershipError) {
+    return boardMembershipError;
   }
 
   const { error } = await supabase.from("cards").delete().eq("id", params.cardId);

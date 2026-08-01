@@ -25,6 +25,14 @@ All notable changes to this project are documented here.
   indexes, `updated_at` triggers, and a due-date constraint.
 - Card detail fields end-to-end: `assignee`, `startDate`, `dueDate` on API + UI.
 - In-card edit panel (Vietnamese UI) to update task details directly from board view.
+- Email-only authentication endpoints (`/api/auth/login`, `/api/auth/session`,
+  `/api/auth/logout`) with HTTP-only session cookie.
+- Board member management API (`/api/boards/:boardId/members`) to invite members by email.
+- Member-aware data model in `supabase/schema.sql`: `members`, `board_members`,
+  and `cards.assignee_member_id`.
+- Added idempotent migration SQL to backfill the new auth/member schema on
+  already-deployed Supabase projects.
+- Popup/modal task-detail editor for create/update task flows.
 
 ### Changed
 
@@ -39,8 +47,13 @@ All notable changes to this project are documented here.
   when credentials are not configured.
 - Improved homepage API error handling (`try/catch` + timeout wrapper) so
   missing configuration shows explicit Vietnamese errors.
+- Board/list/card API routes now require email login and enforce board membership permissions.
+- Card assignment changed from free text (`assignee`) to member-based assignment
+  (`assignee_member_id` + displayed member email).
+- Home page now gates board access behind email login.
 
 ### Removed
 
 - Removed Prisma runtime/schema/seed usage (`prisma/*`, `src/lib/prisma.ts`,
   Prisma scripts in `package.json`, and Prisma dependencies).
+- Removed inline in-card task detail editor in favor of popup-based details.
