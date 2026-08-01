@@ -1,34 +1,58 @@
 import { NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
 import { nextPosition } from "@/lib/board";
+import {
+  getSupabaseEnvErrorMessage,
+  getSupabaseServerClient,
+  toListDTO,
+} from "@/lib/supabase";
 
 export const dynamic = "force-dynamic";
 
 export async function POST(request: Request) {
+  const supabase = getSupabaseServerClient();
+  if (!supabase) {
+    return NextResponse.json(
+      { error: getSupabaseEnvErrorMessage() },
+      { status: 500 }
+    );
+  }
+
   const body = await request.json().catch(() => ({}));
   const boardId = typeof body.boardId === "string" ? body.boardId : "";
   const title = typeof body.title === "string" ? body.title.trim() : "";
 
   if (!boardId || !title) {
     return NextResponse.json(
-      { error: "boardId and title are required" },
+      { error: "boardId và title là bắt buộc." },
       { status: 400 }
     );
   }
 
-  const existing = await prisma.list.findMany({
-    where: { boardId },
-    select: { position: true },
-  });
+  const { data: existingLists, error: existingError } = await supabase
+    .from("lists")
+    .select("position")
+    .eq("board_id", boardId);
 
-  const list = await prisma.list.create({
-    data: {
+  if (existingError) {
+    return NextResponse.json({ error: existingError.message }, { status: 500 });
+  }
+
+  const { data: list, error: listError } = await supabase
+    .from("lists")
+    .insert({
       title,
-      boardId,
-      position: nextPosition(existing.map((l) => l.position)),
-    },
-    include: { cards: true },
-  });
+      board_id: boardId,
+      position: nextPosition(existingLists.map((list) => list.position)),
+    })
+    .select("id, title, position, board_id, created_at, updated_at")
+    .single();
 
-  return NextResponse.json(list, { status: 201 });
+  if (listError || !list) {
+    return NextResponse.json(
+      { error: listError?.message ?? "Không thể tạo danh sách." },
+      { status: 500 }
+    );
+  }
+
+  return NextResponse.json(toListDTO({ list, cards: [] }), { status: 201 });
 }
