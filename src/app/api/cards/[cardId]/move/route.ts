@@ -1,6 +1,9 @@
 import { NextResponse } from "next/server";
-import { prisma } from "@/lib/prisma";
 import { computeMove } from "@/lib/board";
+import {
+  getSupabaseEnvErrorMessage,
+  getSupabaseServerClient,
+} from "@/lib/supabase";
 
 export const dynamic = "force-dynamic";
 
@@ -12,37 +15,60 @@ export async function PATCH(
   request: Request,
   { params }: { params: { cardId: string } }
 ) {
+  const supabase = getSupabaseServerClient();
+  if (!supabase) {
+    return NextResponse.json(
+      { error: getSupabaseEnvErrorMessage() },
+      { status: 500 }
+    );
+  }
+
   const body = await request.json().catch(() => ({}));
   const destListId = typeof body.destListId === "string" ? body.destListId : "";
   const destIndex =
     typeof body.destIndex === "number" && body.destIndex >= 0 ? body.destIndex : 0;
 
   if (!destListId) {
-    return NextResponse.json({ error: "destListId is required" }, { status: 400 });
+    return NextResponse.json({ error: "destListId là bắt buộc." }, { status: 400 });
   }
 
-  const card = await prisma.card.findUnique({ where: { id: params.cardId } });
-  if (!card) {
-    return NextResponse.json({ error: "Card not found" }, { status: 404 });
+  const { data: card, error: cardError } = await supabase
+    .from("cards")
+    .select("id, list_id")
+    .eq("id", params.cardId)
+    .single();
+
+  if (cardError || !card) {
+    return NextResponse.json({ error: "Không tìm thấy thẻ công việc." }, { status: 404 });
   }
 
-  const sourceListId = card.listId;
+  const sourceListId = card.list_id;
   const sameList = sourceListId === destListId;
 
-  const [sourceCards, destCards] = await Promise.all([
-    prisma.card.findMany({
-      where: { listId: sourceListId },
-      orderBy: { position: "asc" },
-      select: { id: true },
-    }),
-    sameList
-      ? Promise.resolve([])
-      : prisma.card.findMany({
-          where: { listId: destListId },
-          orderBy: { position: "asc" },
-          select: { id: true },
-        }),
-  ]);
+  const { data: sourceCards, error: sourceError } = await supabase
+    .from("cards")
+    .select("id")
+    .eq("list_id", sourceListId)
+    .order("position", { ascending: true });
+
+  if (sourceError) {
+    return NextResponse.json({ error: sourceError.message }, { status: 500 });
+  }
+
+  let destCards: { id: string }[] = [];
+  if (!sameList) {
+    const { data, error } = await supabase
+      .from("cards")
+      .select("id")
+      .eq("list_id", destListId)
+      .order("position", { ascending: true });
+
+    if (error) {
+      return NextResponse.json({ error: error.message }, { status: 500 });
+    }
+
+    destCards = data;
+  }
 
   const { sourceOrder, destOrder } = computeMove({
     cardId: params.cardId,
@@ -52,20 +78,39 @@ export async function PATCH(
     destIndex,
   });
 
-  await prisma.$transaction([
-    prisma.card.update({
-      where: { id: params.cardId },
-      data: { listId: destListId },
-    }),
-    ...sourceOrder.map((id, index) =>
-      prisma.card.update({ where: { id }, data: { position: index } })
-    ),
-    ...(sameList
-      ? []
-      : destOrder.map((id, index) =>
-          prisma.card.update({ where: { id }, data: { position: index } })
-        )),
-  ]);
+  if (!sameList) {
+    const { error } = await supabase
+      .from("cards")
+      .update({ list_id: destListId })
+      .eq("id", params.cardId);
+    if (error) {
+      return NextResponse.json({ error: error.message }, { status: 500 });
+    }
+  }
+
+  for (let index = 0; index < sourceOrder.length; index += 1) {
+    const id = sourceOrder[index];
+    const { error } = await supabase
+      .from("cards")
+      .update({ position: index })
+      .eq("id", id);
+    if (error) {
+      return NextResponse.json({ error: error.message }, { status: 500 });
+    }
+  }
+
+  if (!sameList) {
+    for (let index = 0; index < destOrder.length; index += 1) {
+      const id = destOrder[index];
+      const { error } = await supabase
+        .from("cards")
+        .update({ position: index })
+        .eq("id", id);
+      if (error) {
+        return NextResponse.json({ error: error.message }, { status: 500 });
+      }
+    }
+  }
 
   return NextResponse.json({ ok: true });
 }

@@ -2,6 +2,9 @@ export interface CardDTO {
   id: string;
   title: string;
   description: string | null;
+  assignee: string | null;
+  startDate: string | null;
+  dueDate: string | null;
   position: number;
   listId: string;
 }

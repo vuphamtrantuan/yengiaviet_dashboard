@@ -4,7 +4,8 @@ import "./globals.css";
 
 export const metadata: Metadata = {
   title: "TaskFlow",
-  description: "A Trello-like task management app: Kanban boards, lists, and cards.",
+  description:
+    "Ứng dụng quản lý công việc kiểu Kanban với bảng, danh sách và thẻ.",
 };
 
 export default function RootLayout({
@@ -13,7 +14,7 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en">
+    <html lang="vi">
       <body className="min-h-screen">
         <header className="border-b border-slate-800 bg-slate-900/60 backdrop-blur">
           <div className="mx-auto flex max-w-7xl items-center gap-3 px-4 py-3">
@@ -24,7 +25,7 @@ export default function RootLayout({
               <span className="text-lg tracking-tight">TaskFlow</span>
             </Link>
             <span className="ml-2 rounded-full bg-slate-800 px-2 py-0.5 text-xs text-slate-400">
-              Kanban
+              Quản lý tác vụ
             </span>
           </div>
         </header>
