@@ -11,8 +11,21 @@ All notable changes to this project are documented here.
   avoid CSS `transform` transitions on draggable cards, and persist
   `list_id` + final `position` atomically on the server.
 
+### Changed
+
+- Rebranded product name and metadata to **Nhà Yến Vui Vẻ** (layout, package,
+  docs).
+- Hidden native scrollbars app-wide; enabled smooth scrolling for vertical and
+  horizontal overflow regions.
+- Assignees prefer display **name** over email across board UI.
+
 ### Added
 
+- **Rename board** via `PATCH /api/boards/:id` `{ title }` and board header UI.
+- **Archive board** via `boards.archived_at` + `PATCH { archived }`; home list
+  excludes archived boards; restore from “Bảng đã lưu trữ” (`?archived=1`).
+- **Profile page** (`/profile`, `GET/PATCH /api/profile`) for the current user
+  to update their display name.
 - **Shared workspace boards**: every authenticated user sees and uses the same
   boards (no longer scoped per account via `board_members` access checks).
 - **Users management** page (`/users`) and APIs (`GET/POST /api/members`,

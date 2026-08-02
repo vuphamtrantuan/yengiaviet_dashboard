@@ -1,9 +1,10 @@
-# TaskFlow
+# Nhà Yến Vui Vẻ
 
 A Trello-like task management app: **shared Kanban boards** with **lists**,
 drag-and-drop **cards**, workspace **users**, filters, and soft **archive**.
 
-> Repository was originally named `ecom-sale-planner`; the product scope is a task/Kanban board manager.
+> Repository was originally named `ecom-sale-planner` / TaskFlow; the product is
+> now branded **Nhà Yến Vui Vẻ**.
 
 ## Tech stack
 
@@ -34,7 +35,7 @@ Apply DB schema in Supabase SQL Editor:
 
 - Open `supabase/schema.sql`
 - Run the full script (idempotent). It adds `members.name`, `cards.archived_at`,
-  and indexes used by the archive/active card queries.
+  `boards.archived_at`, and related indexes.
 
 ### 2) Start the app
 
@@ -58,8 +59,9 @@ npm run dev
 - **Board** → has many **Lists** → each has many **Cards**.
 - Boards are **shared** across the whole workspace: any logged-in user can open
   every board.
-- **Members** are workspace users (managed at `/users`) and can be assigned to tasks.
-- Cards support soft archive via `archived_at` (excluded from the main board fetch).
+- Boards and cards support soft archive via `archived_at` (excluded from default fetches).
+- **Members** are workspace users (managed at `/users`, self-edit at `/profile`)
+  and can be assigned to tasks (UI shows display name).
 - Cards and lists are ordered by an integer `position`; drag-and-drop recomputes
   dense sequential positions on the server (see `src/lib/board.ts`).
 
@@ -67,8 +69,8 @@ npm run dev
 
 | Method | Route | Purpose |
 | --- | --- | --- |
-| `GET/POST` | `/api/boards` | List / create shared boards |
-| `GET/DELETE` | `/api/boards/:id` | Fetch full board (active cards) / delete |
+| `GET/POST` | `/api/boards` | List active / create shared boards (`?archived=1` for archived) |
+| `GET/PATCH/DELETE` | `/api/boards/:id` | Fetch / rename-archive / permanently delete |
 | `GET` | `/api/boards/:id/archived` | Fetch archived cards for archive panel |
 | `POST` | `/api/lists` | Create a list |
 | `DELETE` | `/api/lists/:id` | Delete a list |
@@ -78,6 +80,7 @@ npm run dev
 | `PATCH` | `/api/cards/:id/archive` | Archive or restore a card |
 | `GET/POST` | `/api/members` | List / create workspace users |
 | `PATCH/DELETE` | `/api/members/:id` | Update / remove a workspace user |
+| `GET/PATCH` | `/api/profile` | Read / update current user display name |
 | `POST` | `/api/auth/login` | Email-only login (no password) |
 | `GET` | `/api/auth/session` | Current login session |
 | `POST` | `/api/auth/logout` | Logout current session |
@@ -85,16 +88,18 @@ npm run dev
 ## Authentication and users
 
 - Every user logs in with email only (no password).
-- All boards are shared; login is only required to identify the current user
-  (for “My tasks”, assignees, and audit-friendly UX).
+- All boards are shared; login identifies the current user (My tasks, assignees).
+- Update your display name at `/profile` — assignees show **name** (email only as fallback).
 - Manage workspace users at `/users` (add, rename, remove).
-- Task details are edited in a dialog; archive is preferred over hard delete.
 
 ## Board UX
 
+- **Rename board** from the board header pencil control.
+- **Archive board** (with confirm) hides it from the home list; restore from “Bảng đã lưu trữ”.
 - **Việc của tôi**: show only cards assigned to the current user.
 - **Sort by due date**: ascending or descending (drag-and-drop pauses while sorted/filtered).
-- **Archive icon**: loads archived cards in a side panel without bloating the main board query.
+- **Thẻ lưu trữ**: loads archived cards in a side panel without bloating the main board query.
+- Scrollbars are hidden; pages use smooth scrolling vertically and horizontally.
 
 ## Deploy to Vercel
 

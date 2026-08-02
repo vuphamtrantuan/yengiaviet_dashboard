@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { Pencil, Trash2, UserPlus } from "lucide-react";
 import { ApiError, fetchJson } from "@/lib/api-client";
+import { memberDisplayName } from "@/lib/member-display";
 import type { MemberDTO } from "@/lib/types";
 import { useSession } from "@/hooks/use-session";
 import { Button } from "@/components/ui/button";
@@ -177,7 +178,7 @@ export default function UsersPage() {
             >
               <div className="min-w-0 flex-1">
                 <p className="truncate font-medium">
-                  {item.name || item.email}
+                  {memberDisplayName(item)}
                 </p>
                 {item.name ? (
                   <p className="truncate text-xs text-muted-foreground">

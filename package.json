@@ -1,8 +1,8 @@
 {
-  "name": "taskflow",
+  "name": "nha-yen-vui-ve",
   "version": "0.1.0",
   "private": true,
-  "description": "TaskFlow - a Trello-like task management app (Kanban boards, lists, and cards)",
+  "description": "Nhà Yến Vui Vẻ - ứng dụng quản lý công việc Kanban (bảng, danh sách và thẻ)",
   "scripts": {
     "dev": "next dev",
     "build": "next build",

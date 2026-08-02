@@ -16,9 +16,13 @@ const sora = Sora({
 });
 
 export const metadata: Metadata = {
-  title: "TaskFlow",
+  title: {
+    default: "Nhà Yến Vui Vẻ",
+    template: "%s · Nhà Yến Vui Vẻ",
+  },
   description:
-    "Ứng dụng quản lý công việc kiểu Kanban với bảng, danh sách và thẻ.",
+    "Nhà Yến Vui Vẻ — ứng dụng quản lý công việc Kanban với bảng dùng chung, giao việc và lưu trữ.",
+  applicationName: "Nhà Yến Vui Vẻ",
 };
 
 export default function RootLayout({
@@ -27,17 +31,17 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="vi">
+    <html lang="vi" className="scroll-smooth">
       <body className={`${plusJakarta.variable} ${sora.variable} font-sans`}>
         <Providers>
           <header className="sticky top-0 z-40 border-b border-border/80 bg-card/80 backdrop-blur-md">
             <div className="mx-auto flex max-w-7xl items-center gap-4 px-4 py-3">
-              <Link href="/" className="flex items-center gap-2.5">
-                <span className="grid h-9 w-9 place-items-center rounded-xl bg-gradient-to-br from-sky-500 to-teal-500 font-display text-sm font-bold text-white shadow-sm">
-                  TF
+              <Link href="/" className="flex min-w-0 items-center gap-2.5">
+                <span className="grid h-9 w-9 shrink-0 place-items-center rounded-xl bg-gradient-to-br from-sky-500 to-teal-500 font-display text-xs font-bold text-white shadow-sm">
+                  NY
                 </span>
-                <span className="font-display text-xl font-semibold tracking-tight text-foreground">
-                  TaskFlow
+                <span className="truncate font-display text-lg font-semibold tracking-tight text-foreground sm:text-xl">
+                  Nhà Yến Vui Vẻ
                 </span>
               </Link>
               <AppNav />
