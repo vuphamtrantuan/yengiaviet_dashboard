@@ -30,6 +30,7 @@ export interface BoardDTO {
   id: string;
   title: string;
   createdAt: string;
+  archivedAt: string | null;
   lists: ListDTO[];
   members: MemberDTO[];
 }
@@ -38,6 +39,7 @@ export interface BoardSummary {
   id: string;
   title: string;
   createdAt: string;
+  archivedAt: string | null;
   _count: { lists: number };
 }
 

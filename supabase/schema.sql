@@ -1,4 +1,4 @@
--- TaskFlow schema for Supabase Postgres.
+-- Nhà Yến Vui Vẻ schema for Supabase Postgres.
 -- Run this script in Supabase SQL Editor before starting the app on Vercel.
 
 create extension if not exists "pgcrypto";
@@ -6,6 +6,7 @@ create extension if not exists "pgcrypto";
 create table if not exists public.boards (
   id uuid primary key default gen_random_uuid(),
   title text not null,
+  archived_at timestamptz,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -59,6 +60,9 @@ add column if not exists assignee_member_id uuid;
 alter table public.cards
 add column if not exists archived_at timestamptz;
 
+alter table public.boards
+add column if not exists archived_at timestamptz;
+
 alter table public.members
 add column if not exists name text;
 
@@ -71,6 +75,12 @@ create index if not exists cards_active_list_id_idx
   where archived_at is null;
 create index if not exists cards_archived_at_idx
   on public.cards(archived_at)
+  where archived_at is not null;
+create index if not exists boards_active_idx
+  on public.boards(created_at)
+  where archived_at is null;
+create index if not exists boards_archived_at_idx
+  on public.boards(archived_at)
   where archived_at is not null;
 
 do $$

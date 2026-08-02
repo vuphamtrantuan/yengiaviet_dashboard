@@ -1,24 +1,33 @@
 import { NextResponse } from "next/server";
-import { toBoardSummary } from "@/lib/supabase";
+import { toBoardSummary, type BoardRow } from "@/lib/supabase";
 import { requireSupabaseAndMember } from "@/lib/server-auth";
 
 export const dynamic = "force-dynamic";
 
 /**
- * List every board in the shared workspace for any authenticated user.
- * Uses a single boards query plus one lists count query for speed.
+ * List shared boards. By default returns active boards only.
+ * Pass `?archived=1` to list archived boards for the restore panel.
  */
-export async function GET() {
+export async function GET(request: Request) {
   const authContext = await requireSupabaseAndMember();
   if ("errorResponse" in authContext) {
     return authContext.errorResponse;
   }
 
   const { supabase } = authContext;
-  const { data: boards, error: boardsError } = await supabase
+  const archivedOnly =
+    new URL(request.url).searchParams.get("archived") === "1";
+
+  let query = supabase
     .from("boards")
-    .select("id, title, created_at, updated_at")
+    .select("id, title, archived_at, created_at, updated_at")
     .order("created_at", { ascending: true });
+
+  query = archivedOnly
+    ? query.not("archived_at", "is", null)
+    : query.is("archived_at", null);
+
+  const { data: boards, error: boardsError } = await query;
 
   if (boardsError) {
     return NextResponse.json({ error: boardsError.message }, { status: 500 });
@@ -44,7 +53,7 @@ export async function GET() {
   }, new Map<string, number>());
 
   return NextResponse.json(
-    boards.map((board) =>
+    (boards as BoardRow[]).map((board) =>
       toBoardSummary({
         board,
         listsCount: listsByBoardId.get(board.id) ?? 0,
@@ -69,8 +78,8 @@ export async function POST(request: Request) {
 
   const { data: board, error: boardError } = await supabase
     .from("boards")
-    .insert({ title })
-    .select("id, title, created_at, updated_at")
+    .insert({ title, archived_at: null })
+    .select("id, title, archived_at, created_at, updated_at")
     .single();
 
   if (boardError || !board) {
@@ -94,7 +103,6 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: listsError.message }, { status: 500 });
   }
 
-  // Keep board_members in sync for legacy rows; access no longer depends on it.
   await supabase.from("board_members").upsert(
     {
       board_id: board.id,
@@ -105,7 +113,7 @@ export async function POST(request: Request) {
 
   return NextResponse.json(
     {
-      ...toBoardSummary({ board, listsCount: lists.length }),
+      ...toBoardSummary({ board: board as BoardRow, listsCount: lists.length }),
       lists,
     },
     { status: 201 }

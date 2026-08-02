@@ -10,6 +10,7 @@ import type {
 export interface BoardRow {
   id: string;
   title: string;
+  archived_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -146,6 +147,7 @@ export function toBoardSummary(params: {
     id: board.id,
     title: board.title,
     createdAt: board.created_at,
+    archivedAt: board.archived_at ?? null,
     _count: { lists: listsCount },
   };
 }
@@ -160,6 +162,7 @@ export function toBoardDTO(params: {
     id: board.id,
     title: board.title,
     createdAt: board.created_at,
+    archivedAt: board.archived_at ?? null,
     lists,
     members,
   };

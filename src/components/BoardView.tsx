@@ -17,6 +17,7 @@ import {
   ArrowLeft,
   CalendarClock,
   Filter,
+  Pencil,
   Plus,
   Trash2,
   UserRound,
@@ -24,6 +25,7 @@ import {
 import type {
   ArchivedCardDTO,
   BoardDTO,
+  BoardSummary,
   CardDTO,
   ListDTO,
   MemberDTO,
@@ -33,8 +35,13 @@ import {
   applyCardViewFilters,
   type TaskSortMode,
 } from "@/lib/card-filters";
+import {
+  assigneeDisplayName,
+  memberDisplayName,
+} from "@/lib/member-display";
 import { ApiError, fetchJson } from "@/lib/api-client";
 import { useSession } from "@/hooks/use-session";
+import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -98,11 +105,8 @@ function formatDate(value: string | null): string {
   return new Intl.DateTimeFormat("vi-VN").format(parsed);
 }
 
-function memberLabel(member: Pick<MemberDTO, "email" | "name">): string {
-  return member.name || member.email;
-}
-
 export default function BoardView({ boardId }: { boardId: string }) {
+  const router = useRouter();
   const queryClient = useQueryClient();
   const { data: sessionData } = useSession();
   const currentMember = sessionData?.member ?? null;
@@ -110,6 +114,11 @@ export default function BoardView({ boardId }: { boardId: string }) {
   const [cardModalState, setCardModalState] = useState<CardModalState>(null);
   const [archiveConfirm, setArchiveConfirm] = useState<ArchiveConfirmState>(null);
   const [archiving, setArchiving] = useState(false);
+  const [renameOpen, setRenameOpen] = useState(false);
+  const [renameTitle, setRenameTitle] = useState("");
+  const [renaming, setRenaming] = useState(false);
+  const [boardArchiveConfirm, setBoardArchiveConfirm] = useState(false);
+  const [boardArchiving, setBoardArchiving] = useState(false);
   const [myTasksOnly, setMyTasksOnly] = useState(false);
   const [sortMode, setSortMode] = useState<TaskSortMode>("position");
   const [archiveOpen, setArchiveOpen] = useState(false);
@@ -337,6 +346,60 @@ export default function BoardView({ boardId }: { boardId: string }) {
     }
   }
 
+  async function renameBoard() {
+    const trimmed = renameTitle.trim();
+    if (!trimmed) {
+      setError("Tên bảng không được để trống.");
+      return;
+    }
+
+    setRenaming(true);
+    try {
+      const updated = await fetchJson<BoardSummary>(`/api/boards/${boardId}`, {
+        method: "PATCH",
+        body: JSON.stringify({ title: trimmed }),
+      });
+      setBoardCache((prev) => ({ ...prev, title: updated.title }));
+      queryClient.invalidateQueries({ queryKey: ["boards"] });
+      setRenameOpen(false);
+      setError(null);
+    } catch (err) {
+      setError(
+        err instanceof ApiError ? err.message : "Không thể đổi tên bảng."
+      );
+    } finally {
+      setRenaming(false);
+    }
+  }
+
+  async function setBoardArchived(archived: boolean) {
+    setBoardArchiving(true);
+    try {
+      const updated = await fetchJson<BoardSummary>(`/api/boards/${boardId}`, {
+        method: "PATCH",
+        body: JSON.stringify({ archived }),
+      });
+      setBoardCache((prev) => ({
+        ...prev,
+        archivedAt: updated.archivedAt,
+      }));
+      await queryClient.invalidateQueries({ queryKey: ["boards"] });
+      setBoardArchiveConfirm(false);
+      setError(null);
+      if (archived) {
+        router.push("/");
+      }
+    } catch (err) {
+      setError(
+        err instanceof ApiError
+          ? err.message
+          : "Không thể cập nhật lưu trữ bảng."
+      );
+    } finally {
+      setBoardArchiving(false);
+    }
+  }
+
   async function deleteCard(listId: string, cardId: string) {
     try {
       await fetchJson(`/api/cards/${cardId}`, { method: "DELETE" });
@@ -387,7 +450,23 @@ export default function BoardView({ boardId }: { boardId: string }) {
         <h1 className="font-display text-2xl font-semibold tracking-tight">
           {board.title}
         </h1>
-        <Badge variant="secondary">Dùng chung workspace</Badge>
+        <Button
+          type="button"
+          size="icon"
+          variant="ghost"
+          aria-label="Đổi tên bảng"
+          onClick={() => {
+            setRenameTitle(board.title);
+            setRenameOpen(true);
+          }}
+        >
+          <Pencil className="h-4 w-4" />
+        </Button>
+        {board.archivedAt ? (
+          <Badge variant="accent">Đã lưu trữ</Badge>
+        ) : (
+          <Badge variant="secondary">Dùng chung workspace</Badge>
+        )}
 
         <div className="ml-auto flex flex-wrap items-center gap-2">
           <div className="flex items-center gap-2 rounded-lg border bg-card px-3 py-1.5">
@@ -417,17 +496,47 @@ export default function BoardView({ boardId }: { boardId: string }) {
             </SelectContent>
           </Select>
 
+          {board.archivedAt ? (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setBoardArchived(false)}
+              disabled={boardArchiving}
+            >
+              <ArchiveRestore className="h-4 w-4" />
+              Khôi phục bảng
+            </Button>
+          ) : (
+            <Button
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => setBoardArchiveConfirm(true)}
+            >
+              <Archive className="h-4 w-4" />
+              Lưu trữ bảng
+            </Button>
+          )}
+
           <Button
             type="button"
             variant={archiveOpen ? "default" : "outline"}
-            size="icon"
+            size="sm"
             aria-label="Xem thẻ đã lưu trữ"
             onClick={() => setArchiveOpen((open) => !open)}
           >
             <Archive className="h-4 w-4" />
+            Thẻ lưu trữ
           </Button>
         </div>
       </div>
+
+      {board.archivedAt ? (
+        <p className="mb-3 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
+          Bảng này đang được lưu trữ. Khôi phục để đưa lại vào danh sách chính.
+        </p>
+      ) : null}
 
       {dragDisabled ? (
         <p className="mb-3 text-xs text-muted-foreground">
@@ -443,7 +552,7 @@ export default function BoardView({ boardId }: { boardId: string }) {
 
       <div className="flex gap-4">
         <DragDropContext onDragEnd={onDragEnd}>
-          <div className="thin-scroll flex min-w-0 flex-1 items-start gap-4 overflow-x-auto pb-4">
+          <div className="smooth-scroll flex min-w-0 flex-1 items-start gap-4 overflow-x-auto pb-4">
             {visibleLists.map((list) => (
               <ListColumn
                 key={list.id}
@@ -575,6 +684,68 @@ export default function BoardView({ boardId }: { boardId: string }) {
               }}
             >
               {archiving ? "Đang lưu trữ…" : "Xác nhận lưu trữ"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <Dialog open={renameOpen} onOpenChange={setRenameOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Đổi tên bảng</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-2">
+            <Label htmlFor="board-title">Tên bảng</Label>
+            <Input
+              id="board-title"
+              value={renameTitle}
+              onChange={(event) => setRenameTitle(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  void renameBoard();
+                }
+              }}
+            />
+          </div>
+          <DialogFooter>
+            <Button
+              type="button"
+              onClick={() => void renameBoard()}
+              disabled={renaming || !renameTitle.trim()}
+            >
+              {renaming ? "Đang lưu…" : "Lưu tên mới"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <AlertDialog
+        open={boardArchiveConfirm}
+        onOpenChange={(open) => {
+          if (!open && !boardArchiving) {
+            setBoardArchiveConfirm(false);
+          }
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Lưu trữ bảng này?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Bảng “{board.title}” sẽ được ẩn khỏi danh sách chính. Bạn có thể
+              khôi phục sau từ trang chủ.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={boardArchiving}>Hủy</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={boardArchiving}
+              onClick={(event) => {
+                event.preventDefault();
+                void setBoardArchived(true);
+              }}
+            >
+              {boardArchiving ? "Đang lưu trữ…" : "Xác nhận lưu trữ"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -717,7 +888,10 @@ function CardPreview({
       <div className="mt-2 space-y-1 text-xs text-muted-foreground">
         <p className="flex items-center gap-1">
           <UserRound className="h-3 w-3" />
-          {card.assigneeMemberName || card.assigneeMemberEmail || "Chưa gán"}
+          {assigneeDisplayName(
+            card.assigneeMemberName,
+            card.assigneeMemberEmail
+          )}
         </p>
         <p>Hạn: {formatDate(card.dueDate)}</p>
       </div>
@@ -835,7 +1009,7 @@ function CardDetailModal({
                 <SelectItem value="unassigned">Chưa giao</SelectItem>
                 {workspaceMembers.map((member) => (
                   <SelectItem key={member.id} value={member.id}>
-                    {memberLabel(member)}
+                    {memberDisplayName(member)}
                   </SelectItem>
                 ))}
               </SelectContent>
