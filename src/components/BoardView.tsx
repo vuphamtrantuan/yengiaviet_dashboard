@@ -28,7 +28,7 @@ import type {
   ListDTO,
   MemberDTO,
 } from "@/lib/types";
-import { computeMove } from "@/lib/board";
+import { applyCardDragToLists } from "@/lib/board-dnd";
 import {
   applyCardViewFilters,
   type TaskSortMode,
@@ -48,6 +48,16 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import {
   Select,
   SelectContent,
@@ -69,6 +79,11 @@ type CardModalState =
   | { mode: "create"; listId: string }
   | { mode: "edit"; listId: string; card: CardDTO }
   | null;
+
+type ArchiveConfirmState = {
+  cardId: string;
+  title: string;
+} | null;
 
 function formatDate(value: string | null): string {
   if (!value) {
@@ -93,6 +108,8 @@ export default function BoardView({ boardId }: { boardId: string }) {
   const currentMember = sessionData?.member ?? null;
 
   const [cardModalState, setCardModalState] = useState<CardModalState>(null);
+  const [archiveConfirm, setArchiveConfirm] = useState<ArchiveConfirmState>(null);
+  const [archiving, setArchiving] = useState(false);
   const [myTasksOnly, setMyTasksOnly] = useState(false);
   const [sortMode, setSortMode] = useState<TaskSortMode>("position");
   const [archiveOpen, setArchiveOpen] = useState(false);
@@ -115,10 +132,20 @@ export default function BoardView({ boardId }: { boardId: string }) {
   });
 
   const board = boardQuery.data ?? null;
+  const dragDisabled = myTasksOnly || sortMode !== "position";
 
+  /**
+   * Lists shown in the board. When drag is enabled we keep the stored card
+   * array order (already position-sorted from the API) so DnD indices stay
+   * aligned with optimistic updates.
+   */
   const visibleLists = useMemo(() => {
     if (!board) {
       return [];
+    }
+
+    if (!dragDisabled) {
+      return board.lists;
     }
 
     return board.lists.map((list) => ({
@@ -130,7 +157,7 @@ export default function BoardView({ boardId }: { boardId: string }) {
         sortMode,
       }),
     }));
-  }, [board, currentMember?.id, myTasksOnly, sortMode]);
+  }, [board, currentMember?.id, dragDisabled, myTasksOnly, sortMode]);
 
   function setBoardCache(updater: (prev: BoardDTO) => BoardDTO) {
     queryClient.setQueryData<BoardDTO>(["board", boardId], (prev) =>
@@ -166,7 +193,7 @@ export default function BoardView({ boardId }: { boardId: string }) {
 
   async function onDragEnd(result: DropResult) {
     const { source, destination, draggableId } = result;
-    if (!destination || !board || sortMode !== "position" || myTasksOnly) {
+    if (!destination || !board || dragDisabled) {
       return;
     }
     if (
@@ -176,56 +203,29 @@ export default function BoardView({ boardId }: { boardId: string }) {
       return;
     }
 
-    const sourceList = board.lists.find((list) => list.id === source.droppableId);
-    const destList = board.lists.find((list) => list.id === destination.droppableId);
-    if (!sourceList || !destList) return;
-
-    const sameList = sourceList.id === destList.id;
-    const { sourceOrder, destOrder } = computeMove({
+    // Use currently rendered lists so destIndex matches what the user saw.
+    const nextLists = applyCardDragToLists({
+      lists: visibleLists,
+      sourceListId: source.droppableId,
+      destListId: destination.droppableId,
       cardId: draggableId,
-      sourceOrder: sourceList.cards.map((card) => card.id),
-      destOrder: destList.cards.map((card) => card.id),
-      sameList,
       destIndex: destination.index,
     });
 
-    const byId = new Map<string, CardDTO>();
-    board.lists.forEach((list) =>
-      list.cards.forEach((card) => byId.set(card.id, card))
-    );
+    if (!nextLists) {
+      return;
+    }
 
     setBoardCache((prev) => ({
       ...prev,
-      lists: prev.lists.map((list) => {
-        if (list.id === sourceList.id) {
-          return {
-            ...list,
-            cards: sourceOrder.map((id, index) => ({
-              ...(byId.get(id) as CardDTO),
-              listId: sourceList.id,
-              position: index,
-            })),
-          };
-        }
-        if (!sameList && list.id === destList.id) {
-          return {
-            ...list,
-            cards: destOrder.map((id, index) => ({
-              ...(byId.get(id) as CardDTO),
-              listId: destList.id,
-              position: index,
-            })),
-          };
-        }
-        return list;
-      }),
+      lists: nextLists,
     }));
 
     try {
       await fetchJson(`/api/cards/${draggableId}/move`, {
         method: "PATCH",
         body: JSON.stringify({
-          destListId: destList.id,
+          destListId: destination.droppableId,
           destIndex: destination.index,
         }),
       });
@@ -316,6 +316,24 @@ export default function BoardView({ boardId }: { boardId: string }) {
       setError(
         err instanceof ApiError ? err.message : "Không thể cập nhật lưu trữ."
       );
+      throw err;
+    }
+  }
+
+  async function confirmArchive() {
+    if (!archiveConfirm) {
+      return;
+    }
+
+    setArchiving(true);
+    try {
+      await archiveCard(archiveConfirm.cardId, true);
+      setArchiveConfirm(null);
+      setCardModalState(null);
+    } catch {
+      // Error message already set in archiveCard.
+    } finally {
+      setArchiving(false);
     }
   }
 
@@ -356,8 +374,6 @@ export default function BoardView({ boardId }: { boardId: string }) {
       </div>
     );
   }
-
-  const dragDisabled = myTasksOnly || sortMode !== "position";
 
   return (
     <div className="animate-fade-up">
@@ -439,7 +455,9 @@ export default function BoardView({ boardId }: { boardId: string }) {
                 onOpenEditCardModal={(card) =>
                   setCardModalState({ mode: "edit", listId: list.id, card })
                 }
-                onArchiveCard={(cardId) => archiveCard(cardId, true)}
+                onRequestArchiveCard={(card) =>
+                  setArchiveConfirm({ cardId: card.id, title: card.title })
+                }
                 onDeleteList={(listId) => deleteListMutation.mutate(listId)}
               />
             ))}
@@ -522,11 +540,45 @@ export default function BoardView({ boardId }: { boardId: string }) {
           onClose={() => setCardModalState(null)}
           onCreate={addCard}
           onUpdate={updateCard}
-          onArchive={(cardId) => archiveCard(cardId, true)}
+          onRequestArchive={(card) =>
+            setArchiveConfirm({ cardId: card.id, title: card.title })
+          }
           onDelete={deleteCard}
           onError={setError}
         />
       ) : null}
+
+      <AlertDialog
+        open={Boolean(archiveConfirm)}
+        onOpenChange={(open) => {
+          if (!open && !archiving) {
+            setArchiveConfirm(null);
+          }
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Lưu trữ thẻ này?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Thẻ “{archiveConfirm?.title}” sẽ được đưa vào mục lưu trữ và ẩn
+              khỏi bảng. Bạn có thể khôi phục bất cứ lúc nào từ biểu tượng lưu
+              trữ.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={archiving}>Hủy</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={archiving}
+              onClick={(event) => {
+                event.preventDefault();
+                void confirmArchive();
+              }}
+            >
+              {archiving ? "Đang lưu trữ…" : "Xác nhận lưu trữ"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   );
 }
@@ -536,14 +588,14 @@ function ListColumn({
   dragDisabled,
   onOpenCreateCardModal,
   onOpenEditCardModal,
-  onArchiveCard,
+  onRequestArchiveCard,
   onDeleteList,
 }: {
   list: ListDTO;
   dragDisabled: boolean;
   onOpenCreateCardModal: () => void;
   onOpenEditCardModal: (card: CardDTO) => void;
-  onArchiveCard: (cardId: string) => void;
+  onRequestArchiveCard: (card: CardDTO) => void;
   onDeleteList: (listId: string) => void;
 }) {
   return (
@@ -564,13 +616,13 @@ function ListColumn({
         </div>
       </div>
 
-      <Droppable droppableId={list.id} isDropDisabled={dragDisabled}>
+      <Droppable droppableId={list.id} type="CARD" isDropDisabled={dragDisabled}>
         {(provided, snapshot) => (
           <div
             ref={provided.innerRef}
             {...provided.droppableProps}
             className={cn(
-              "min-h-[8px] space-y-2 rounded-lg p-1 transition",
+              "min-h-[48px] space-y-2 rounded-lg p-1",
               snapshot.isDraggingOver && "bg-accent/60"
             )}
           >
@@ -587,7 +639,7 @@ function ListColumn({
                     dragProvided={dragProvided}
                     dragSnapshot={dragSnapshot}
                     onOpenCard={onOpenEditCardModal}
-                    onArchiveCard={onArchiveCard}
+                    onRequestArchiveCard={onRequestArchiveCard}
                   />
                 )}
               </Draggable>
@@ -615,24 +667,31 @@ function CardPreview({
   dragProvided,
   dragSnapshot,
   onOpenCard,
-  onArchiveCard,
+  onRequestArchiveCard,
 }: {
   card: CardDTO;
   dragProvided: DraggableProvided;
   dragSnapshot: DraggableStateSnapshot;
   onOpenCard: (card: CardDTO) => void;
-  onArchiveCard: (cardId: string) => void;
+  onRequestArchiveCard: (card: CardDTO) => void;
 }) {
   return (
     <div
       ref={dragProvided.innerRef}
       {...dragProvided.draggableProps}
       {...dragProvided.dragHandleProps}
-      onClick={() => onOpenCard(card)}
+      onClick={() => {
+        if (!dragSnapshot.isDragging) {
+          onOpenCard(card);
+        }
+      }}
       className={cn(
-        "group cursor-pointer rounded-lg border bg-card p-3 text-sm shadow-sm transition hover:border-primary/30",
-        dragSnapshot.isDragging && "border-primary ring-2 ring-primary/20"
+        // Avoid Tailwind `transition` (includes transform) — it breaks dnd positioning.
+        "group cursor-grab rounded-lg border bg-card p-3 text-sm shadow-sm transition-colors hover:border-primary/30 active:cursor-grabbing",
+        dragSnapshot.isDragging &&
+          "border-primary bg-card shadow-md ring-2 ring-primary/20 transition-none"
       )}
+      style={dragProvided.draggableProps.style}
     >
       <div className="flex items-start justify-between gap-2">
         <span className="font-medium">{card.title}</span>
@@ -640,11 +699,11 @@ function CardPreview({
           type="button"
           size="icon"
           variant="ghost"
-          className="h-7 w-7 opacity-0 transition group-hover:opacity-100"
+          className="h-7 w-7 opacity-0 transition-opacity group-hover:opacity-100"
           aria-label={`Lưu trữ thẻ ${card.title}`}
           onClick={(event) => {
             event.stopPropagation();
-            onArchiveCard(card.id);
+            onRequestArchiveCard(card);
           }}
         >
           <Archive className="h-3.5 w-3.5" />
@@ -660,9 +719,7 @@ function CardPreview({
           <UserRound className="h-3 w-3" />
           {card.assigneeMemberName || card.assigneeMemberEmail || "Chưa gán"}
         </p>
-        <p>
-          Hạn: {formatDate(card.dueDate)}
-        </p>
+        <p>Hạn: {formatDate(card.dueDate)}</p>
       </div>
     </div>
   );
@@ -676,7 +733,7 @@ function CardDetailModal({
   onClose,
   onCreate,
   onUpdate,
-  onArchive,
+  onRequestArchive,
   onDelete,
   onError,
 }: {
@@ -691,7 +748,7 @@ function CardDetailModal({
     cardId: string,
     payload: CardMutationPayload
   ) => Promise<boolean>;
-  onArchive: (cardId: string) => Promise<void> | void;
+  onRequestArchive: (card: CardDTO) => void;
   onDelete: (listId: string, cardId: string) => Promise<void> | void;
   onError: (message: string | null) => void;
 }) {
@@ -812,10 +869,7 @@ function CardDetailModal({
               <Button
                 type="button"
                 variant="outline"
-                onClick={async () => {
-                  await onArchive(card.id);
-                  onClose();
-                }}
+                onClick={() => onRequestArchive(card)}
               >
                 <Archive className="h-4 w-4" />
                 Lưu trữ
