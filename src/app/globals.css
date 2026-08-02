@@ -2,12 +2,46 @@
 @tailwind components;
 @tailwind utilities;
 
-:root {
-  color-scheme: dark;
-}
+@layer base {
+  :root {
+    color-scheme: light;
+    --background: 210 40% 98%;
+    --foreground: 222 47% 11%;
+    --card: 0 0% 100%;
+    --card-foreground: 222 47% 11%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 222 47% 11%;
+    --primary: 199 89% 42%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 210 40% 96%;
+    --secondary-foreground: 222 47% 11%;
+    --muted: 210 30% 96%;
+    --muted-foreground: 215 16% 40%;
+    --accent: 186 72% 93%;
+    --accent-foreground: 191 91% 24%;
+    --destructive: 0 72% 51%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 214 32% 88%;
+    --input: 214 32% 88%;
+    --ring: 199 89% 42%;
+    --radius: 0.75rem;
+    --board-surface: 210 45% 96%;
+    --board-column: 0 0% 100%;
+  }
 
-body {
-  @apply bg-slate-950 text-slate-100 antialiased;
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply bg-background text-foreground antialiased;
+    background-image:
+      radial-gradient(ellipse 80% 50% at 10% -10%, hsl(199 89% 42% / 0.12), transparent),
+      radial-gradient(ellipse 60% 40% at 90% 0%, hsl(186 72% 45% / 0.1), transparent),
+      linear-gradient(180deg, hsl(210 40% 98%), hsl(210 35% 96%));
+    background-attachment: fixed;
+    min-height: 100vh;
+  }
 }
 
 /* Thin scrollbars for the horizontal board area. */
@@ -16,7 +50,7 @@ body {
   width: 10px;
 }
 .thin-scroll::-webkit-scrollbar-thumb {
-  @apply rounded-full bg-slate-700;
+  @apply rounded-full bg-border;
 }
 .thin-scroll::-webkit-scrollbar-track {
   background: transparent;

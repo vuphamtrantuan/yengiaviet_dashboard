@@ -9,6 +9,7 @@ import { SESSION_COOKIE_NAME } from "@/lib/server-auth";
 
 export const dynamic = "force-dynamic";
 
+/** Return the current workspace member session, or null when logged out. */
 export async function GET() {
   const supabase = getSupabaseServerClient();
   if (!supabase) {
@@ -25,7 +26,7 @@ export async function GET() {
 
   const { data: member, error } = await supabase
     .from("members")
-    .select("id, email, created_at, updated_at")
+    .select("id, email, name, created_at, updated_at")
     .eq("id", memberId)
     .single();
 

@@ -1,12 +1,12 @@
 import { NextResponse } from "next/server";
 import { computeMove } from "@/lib/board";
-import { ensureBoardMembership, requireSupabaseAndMember } from "@/lib/server-auth";
+import { ensureBoardExists, requireSupabaseAndMember } from "@/lib/server-auth";
 
 export const dynamic = "force-dynamic";
 
 /**
- * Move a card to a destination list at a given index, recomputing dense
- * sequential positions for every affected list inside a transaction.
+ * Move a card within/across lists. Only active (non-archived) cards participate
+ * in position recomputation for safer concurrent board edits.
  */
 export async function PATCH(
   request: Request,
@@ -17,7 +17,7 @@ export async function PATCH(
     return authContext.errorResponse;
   }
 
-  const { supabase, member } = authContext;
+  const { supabase } = authContext;
   const body = await request.json().catch(() => ({}));
   const destListId = typeof body.destListId === "string" ? body.destListId : "";
   const destIndex =
@@ -29,12 +29,19 @@ export async function PATCH(
 
   const { data: card, error: cardError } = await supabase
     .from("cards")
-    .select("id, list_id")
+    .select("id, list_id, archived_at")
     .eq("id", params.cardId)
     .single();
 
   if (cardError || !card) {
     return NextResponse.json({ error: "Không tìm thấy thẻ công việc." }, { status: 404 });
+  }
+
+  if (card.archived_at) {
+    return NextResponse.json(
+      { error: "Không thể di chuyển thẻ đã lưu trữ. Hãy khôi phục trước." },
+      { status: 400 }
+    );
   }
 
   const { data: sourceList, error: sourceListError } = await supabase
@@ -70,13 +77,12 @@ export async function PATCH(
     );
   }
 
-  const boardMembershipError = await ensureBoardMembership({
+  const boardExistsError = await ensureBoardExists({
     supabase,
     boardId: sourceList.board_id,
-    memberId: member.id,
   });
-  if (boardMembershipError) {
-    return boardMembershipError;
+  if (boardExistsError) {
+    return boardExistsError;
   }
 
   const sourceListId = card.list_id;
@@ -86,6 +92,7 @@ export async function PATCH(
     .from("cards")
     .select("id")
     .eq("list_id", sourceListId)
+    .is("archived_at", null)
     .order("position", { ascending: true });
 
   if (sourceError) {
@@ -98,6 +105,7 @@ export async function PATCH(
       .from("cards")
       .select("id")
       .eq("list_id", destListId)
+      .is("archived_at", null)
       .order("position", { ascending: true });
 
     if (error) {
@@ -109,8 +117,10 @@ export async function PATCH(
 
   const { sourceOrder, destOrder } = computeMove({
     cardId: params.cardId,
-    sourceOrder: sourceCards.map((c) => c.id),
-    destOrder: sameList ? sourceCards.map((c) => c.id) : destCards.map((c) => c.id),
+    sourceOrder: sourceCards.map((item) => item.id),
+    destOrder: sameList
+      ? sourceCards.map((item) => item.id)
+      : destCards.map((item) => item.id),
     sameList,
     destIndex,
   });
@@ -125,28 +135,22 @@ export async function PATCH(
     }
   }
 
-  for (let index = 0; index < sourceOrder.length; index += 1) {
-    const id = sourceOrder[index];
-    const { error } = await supabase
-      .from("cards")
-      .update({ position: index })
-      .eq("id", id);
-    if (error) {
-      return NextResponse.json({ error: error.message }, { status: 500 });
-    }
-  }
+  const positionUpdates = sameList
+    ? sourceOrder.map((id, index) => ({ id, position: index }))
+    : [
+        ...sourceOrder.map((id, index) => ({ id, position: index })),
+        ...destOrder.map((id, index) => ({ id, position: index })),
+      ];
 
-  if (!sameList) {
-    for (let index = 0; index < destOrder.length; index += 1) {
-      const id = destOrder[index];
-      const { error } = await supabase
-        .from("cards")
-        .update({ position: index })
-        .eq("id", id);
-      if (error) {
-        return NextResponse.json({ error: error.message }, { status: 500 });
-      }
-    }
+  const results = await Promise.all(
+    positionUpdates.map((update) =>
+      supabase.from("cards").update({ position: update.position }).eq("id", update.id)
+    )
+  );
+
+  const failed = results.find((result) => result.error);
+  if (failed?.error) {
+    return NextResponse.json({ error: failed.error.message }, { status: 500 });
   }
 
   return NextResponse.json({ ok: true });

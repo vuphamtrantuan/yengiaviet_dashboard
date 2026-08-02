@@ -1,17 +1,18 @@
 import { NextResponse } from "next/server";
 import { nextPosition } from "@/lib/board";
 import { toListDTO } from "@/lib/supabase";
-import { ensureBoardMembership, requireSupabaseAndMember } from "@/lib/server-auth";
+import { ensureBoardExists, requireSupabaseAndMember } from "@/lib/server-auth";
 
 export const dynamic = "force-dynamic";
 
+/** Create a list on a shared board. */
 export async function POST(request: Request) {
   const authContext = await requireSupabaseAndMember();
   if ("errorResponse" in authContext) {
     return authContext.errorResponse;
   }
 
-  const { supabase, member } = authContext;
+  const { supabase } = authContext;
   const body = await request.json().catch(() => ({}));
   const boardId = typeof body.boardId === "string" ? body.boardId : "";
   const title = typeof body.title === "string" ? body.title.trim() : "";
@@ -23,13 +24,12 @@ export async function POST(request: Request) {
     );
   }
 
-  const boardMembershipError = await ensureBoardMembership({
+  const boardExistsError = await ensureBoardExists({
     supabase,
     boardId,
-    memberId: member.id,
   });
-  if (boardMembershipError) {
-    return boardMembershipError;
+  if (boardExistsError) {
+    return boardExistsError;
   }
 
   const { data: existingLists, error: existingError } = await supabase
@@ -46,7 +46,7 @@ export async function POST(request: Request) {
     .insert({
       title,
       board_id: boardId,
-      position: nextPosition(existingLists.map((list) => list.position)),
+      position: nextPosition(existingLists.map((item) => item.position)),
     })
     .select("id, title, position, board_id, created_at, updated_at")
     .single();

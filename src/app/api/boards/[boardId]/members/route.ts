@@ -1,11 +1,7 @@
 import { NextResponse } from "next/server";
+import { toMemberDTO } from "@/lib/supabase";
 import {
-  type BoardMemberRow,
-  type MemberRow,
-  toMemberDTO,
-} from "@/lib/supabase";
-import {
-  ensureBoardMembership,
+  ensureBoardExists,
   isValidEmail,
   normalizeEmail,
   requireSupabaseAndMember,
@@ -13,6 +9,10 @@ import {
 
 export const dynamic = "force-dynamic";
 
+/**
+ * Compatibility endpoint: boards share the global workspace member list.
+ * Prefer /api/members for user management.
+ */
 export async function GET(
   _request: Request,
   { params }: { params: { boardId: string } }
@@ -22,46 +22,28 @@ export async function GET(
     return authContext.errorResponse;
   }
 
-  const { supabase, member } = authContext;
-  const boardMembershipError = await ensureBoardMembership({
+  const { supabase } = authContext;
+  const boardExistsError = await ensureBoardExists({
     supabase,
     boardId: params.boardId,
-    memberId: member.id,
   });
-  if (boardMembershipError) {
-    return boardMembershipError;
+  if (boardExistsError) {
+    return boardExistsError;
   }
 
-  const { data: boardMembers, error: boardMembersError } = await supabase
-    .from("board_members")
-    .select("board_id, member_id, created_at")
-    .eq("board_id", params.boardId);
-
-  if (boardMembersError) {
-    return NextResponse.json({ error: boardMembersError.message }, { status: 500 });
-  }
-
-  const memberIds = boardMembers.map(
-    (boardMember: BoardMemberRow) => boardMember.member_id
-  );
-  if (memberIds.length === 0) {
-    return NextResponse.json([]);
-  }
-
-  const { data: members, error: membersError } = await supabase
+  const { data: members, error } = await supabase
     .from("members")
-    .select("id, email, created_at, updated_at")
-    .in("id", memberIds);
+    .select("id, email, name, created_at, updated_at")
+    .order("email", { ascending: true });
 
-  if (membersError) {
-    return NextResponse.json({ error: membersError.message }, { status: 500 });
+  if (error) {
+    return NextResponse.json({ error: error.message }, { status: 500 });
   }
 
-  return NextResponse.json(
-    members.map((item: MemberRow) => toMemberDTO(item))
-  );
+  return NextResponse.json(members.map((item) => toMemberDTO(item)));
 }
 
+/** Invite/create a workspace user (shared across all boards). */
 export async function POST(
   request: Request,
   { params }: { params: { boardId: string } }
@@ -71,14 +53,13 @@ export async function POST(
     return authContext.errorResponse;
   }
 
-  const { supabase, member } = authContext;
-  const boardMembershipError = await ensureBoardMembership({
+  const { supabase } = authContext;
+  const boardExistsError = await ensureBoardExists({
     supabase,
     boardId: params.boardId,
-    memberId: member.id,
   });
-  if (boardMembershipError) {
-    return boardMembershipError;
+  if (boardExistsError) {
+    return boardExistsError;
   }
 
   const body = await request.json().catch(() => ({}));
@@ -91,7 +72,7 @@ export async function POST(
   const { data: newMember, error: newMemberError } = await supabase
     .from("members")
     .upsert({ email }, { onConflict: "email" })
-    .select("id, email, created_at, updated_at")
+    .select("id, email, name, created_at, updated_at")
     .single();
 
   if (newMemberError || !newMember) {
@@ -101,17 +82,13 @@ export async function POST(
     );
   }
 
-  const { error: relationError } = await supabase.from("board_members").upsert(
+  await supabase.from("board_members").upsert(
     {
       board_id: params.boardId,
       member_id: newMember.id,
     },
     { onConflict: "board_id,member_id" }
   );
-
-  if (relationError) {
-    return NextResponse.json({ error: relationError.message }, { status: 500 });
-  }
 
   return NextResponse.json({ member: toMemberDTO(newMember) }, { status: 201 });
 }
