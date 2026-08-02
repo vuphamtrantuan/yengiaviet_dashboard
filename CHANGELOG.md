@@ -78,4 +78,4 @@ All notable changes to this project are documented here.
 - Removed Prisma runtime/schema/seed usage (`prisma/*`, `src/lib/prisma.ts`,
   Prisma scripts in `package.json`, and Prisma dependencies).
 - Removed inline in-card task detail editor in favor of popup-based details.
-  Per-account board isolation (membership-gated listing/access).
+- Removed per-account board isolation (membership-gated listing/access).
