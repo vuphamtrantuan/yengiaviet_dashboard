@@ -6,6 +6,10 @@ All notable changes to this project are documented here.
 
 ### Fixed
 
+- Board archive controls removed from board detail; boards are archived only
+  from the home board list.
+- List delete now requires confirmation and is enabled only when the list has
+  no active cards (enforced in UI + API).
 - Archive actions now require a confirmation dialog to prevent misclicks.
 - Card drag-and-drop across lists: use rendered list order for drop indices,
   avoid CSS `transform` transitions on draggable cards, and persist
@@ -21,6 +25,7 @@ All notable changes to this project are documented here.
 
 ### Added
 
+- Rename task lists via `PATCH /api/lists/:id` and board list header UI.
 - **Rename board** via `PATCH /api/boards/:id` `{ title }` and board header UI.
 - **Archive board** via `boards.archived_at` + `PATCH { archived }`; home list
   excludes archived boards; restore from “Bảng đã lưu trữ” (`?archived=1`).

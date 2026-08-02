@@ -41,7 +41,6 @@ import {
 } from "@/lib/member-display";
 import { ApiError, fetchJson } from "@/lib/api-client";
 import { useSession } from "@/hooks/use-session";
-import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -92,6 +91,16 @@ type ArchiveConfirmState = {
   title: string;
 } | null;
 
+type ListDeleteConfirmState = {
+  listId: string;
+  title: string;
+} | null;
+
+type ListRenameState = {
+  listId: string;
+  title: string;
+} | null;
+
 function formatDate(value: string | null): string {
   if (!value) {
     return "Chưa đặt";
@@ -106,7 +115,6 @@ function formatDate(value: string | null): string {
 }
 
 export default function BoardView({ boardId }: { boardId: string }) {
-  const router = useRouter();
   const queryClient = useQueryClient();
   const { data: sessionData } = useSession();
   const currentMember = sessionData?.member ?? null;
@@ -117,8 +125,11 @@ export default function BoardView({ boardId }: { boardId: string }) {
   const [renameOpen, setRenameOpen] = useState(false);
   const [renameTitle, setRenameTitle] = useState("");
   const [renaming, setRenaming] = useState(false);
-  const [boardArchiveConfirm, setBoardArchiveConfirm] = useState(false);
-  const [boardArchiving, setBoardArchiving] = useState(false);
+  const [listRename, setListRename] = useState<ListRenameState>(null);
+  const [listRenaming, setListRenaming] = useState(false);
+  const [listDeleteConfirm, setListDeleteConfirm] =
+    useState<ListDeleteConfirmState>(null);
+  const [listDeleting, setListDeleting] = useState(false);
   const [myTasksOnly, setMyTasksOnly] = useState(false);
   const [sortMode, setSortMode] = useState<TaskSortMode>("position");
   const [archiveOpen, setArchiveOpen] = useState(false);
@@ -189,16 +200,78 @@ export default function BoardView({ boardId }: { boardId: string }) {
     },
   });
 
-  const deleteListMutation = useMutation({
-    mutationFn: (listId: string) =>
-      fetchJson<{ ok: boolean }>(`/api/lists/${listId}`, { method: "DELETE" }),
-    onSuccess: (_data, listId) => {
+  async function renameList() {
+    if (!listRename) {
+      return;
+    }
+
+    const trimmed = listRename.title.trim();
+    if (!trimmed) {
+      setError("Tên danh sách không được để trống.");
+      return;
+    }
+
+    setListRenaming(true);
+    try {
+      const updated = await fetchJson<ListDTO>(
+        `/api/lists/${listRename.listId}`,
+        {
+          method: "PATCH",
+          body: JSON.stringify({ title: trimmed }),
+        }
+      );
       setBoardCache((prev) => ({
         ...prev,
-        lists: prev.lists.filter((list) => list.id !== listId),
+        lists: prev.lists.map((list) =>
+          list.id === updated.id ? { ...list, title: updated.title } : list
+        ),
       }));
-    },
-  });
+      setListRename(null);
+      setError(null);
+    } catch (err) {
+      setError(
+        err instanceof ApiError ? err.message : "Không thể đổi tên danh sách."
+      );
+    } finally {
+      setListRenaming(false);
+    }
+  }
+
+  async function confirmDeleteList() {
+    if (!listDeleteConfirm) {
+      return;
+    }
+
+    const target = board?.lists.find(
+      (list) => list.id === listDeleteConfirm.listId
+    );
+    if (!target || target.cards.length > 0) {
+      setError("Chỉ có thể xóa danh sách khi không còn thẻ nào bên trong.");
+      return;
+    }
+
+    setListDeleting(true);
+    try {
+      await fetchJson<{ ok: boolean }>(
+        `/api/lists/${listDeleteConfirm.listId}`,
+        { method: "DELETE" }
+      );
+      setBoardCache((prev) => ({
+        ...prev,
+        lists: prev.lists.filter(
+          (list) => list.id !== listDeleteConfirm.listId
+        ),
+      }));
+      setListDeleteConfirm(null);
+      setError(null);
+    } catch (err) {
+      setError(
+        err instanceof ApiError ? err.message : "Không thể xóa danh sách."
+      );
+    } finally {
+      setListDeleting(false);
+    }
+  }
 
   async function onDragEnd(result: DropResult) {
     const { source, destination, draggableId } = result;
@@ -372,34 +445,6 @@ export default function BoardView({ boardId }: { boardId: string }) {
     }
   }
 
-  async function setBoardArchived(archived: boolean) {
-    setBoardArchiving(true);
-    try {
-      const updated = await fetchJson<BoardSummary>(`/api/boards/${boardId}`, {
-        method: "PATCH",
-        body: JSON.stringify({ archived }),
-      });
-      setBoardCache((prev) => ({
-        ...prev,
-        archivedAt: updated.archivedAt,
-      }));
-      await queryClient.invalidateQueries({ queryKey: ["boards"] });
-      setBoardArchiveConfirm(false);
-      setError(null);
-      if (archived) {
-        router.push("/");
-      }
-    } catch (err) {
-      setError(
-        err instanceof ApiError
-          ? err.message
-          : "Không thể cập nhật lưu trữ bảng."
-      );
-    } finally {
-      setBoardArchiving(false);
-    }
-  }
-
   async function deleteCard(listId: string, cardId: string) {
     try {
       await fetchJson(`/api/cards/${cardId}`, { method: "DELETE" });
@@ -496,29 +541,6 @@ export default function BoardView({ boardId }: { boardId: string }) {
             </SelectContent>
           </Select>
 
-          {board.archivedAt ? (
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={() => setBoardArchived(false)}
-              disabled={boardArchiving}
-            >
-              <ArchiveRestore className="h-4 w-4" />
-              Khôi phục bảng
-            </Button>
-          ) : (
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={() => setBoardArchiveConfirm(true)}
-            >
-              <Archive className="h-4 w-4" />
-              Lưu trữ bảng
-            </Button>
-          )}
-
           <Button
             type="button"
             variant={archiveOpen ? "default" : "outline"}
@@ -534,7 +556,7 @@ export default function BoardView({ boardId }: { boardId: string }) {
 
       {board.archivedAt ? (
         <p className="mb-3 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
-          Bảng này đang được lưu trữ. Khôi phục để đưa lại vào danh sách chính.
+          Bảng này đang được lưu trữ. Khôi phục từ trang danh sách bảng.
         </p>
       ) : null}
 
@@ -567,7 +589,12 @@ export default function BoardView({ boardId }: { boardId: string }) {
                 onRequestArchiveCard={(card) =>
                   setArchiveConfirm({ cardId: card.id, title: card.title })
                 }
-                onDeleteList={(listId) => deleteListMutation.mutate(listId)}
+                onRequestRenameList={() =>
+                  setListRename({ listId: list.id, title: list.title })
+                }
+                onRequestDeleteList={() =>
+                  setListDeleteConfirm({ listId: list.id, title: list.title })
+                }
               />
             ))}
 
@@ -720,32 +747,80 @@ export default function BoardView({ boardId }: { boardId: string }) {
         </DialogContent>
       </Dialog>
 
-      <AlertDialog
-        open={boardArchiveConfirm}
+      <Dialog
+        open={Boolean(listRename)}
         onOpenChange={(open) => {
-          if (!open && !boardArchiving) {
-            setBoardArchiveConfirm(false);
+          if (!open && !listRenaming) {
+            setListRename(null);
+          }
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Đổi tên danh sách</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-2">
+            <Label htmlFor="list-title">Tên danh sách</Label>
+            <Input
+              id="list-title"
+              value={listRename?.title ?? ""}
+              onChange={(event) =>
+                setListRename((prev) =>
+                  prev ? { ...prev, title: event.target.value } : prev
+                )
+              }
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  void renameList();
+                }
+              }}
+            />
+          </div>
+          <DialogFooter>
+            <Button
+              type="button"
+              onClick={() => void renameList()}
+              disabled={listRenaming || !listRename?.title.trim()}
+            >
+              {listRenaming ? "Đang lưu…" : "Lưu tên mới"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <AlertDialog
+        open={Boolean(listDeleteConfirm)}
+        onOpenChange={(open) => {
+          if (!open && !listDeleting) {
+            setListDeleteConfirm(null);
           }
         }}
       >
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Lưu trữ bảng này?</AlertDialogTitle>
+            <AlertDialogTitle>Xóa danh sách này?</AlertDialogTitle>
             <AlertDialogDescription>
-              Bảng “{board.title}” sẽ được ẩn khỏi danh sách chính. Bạn có thể
-              khôi phục sau từ trang chủ.
+              Danh sách “{listDeleteConfirm?.title}” sẽ bị xóa vĩnh viễn. Chỉ
+              xóa được khi danh sách đang trống.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel disabled={boardArchiving}>Hủy</AlertDialogCancel>
+            <AlertDialogCancel disabled={listDeleting}>Hủy</AlertDialogCancel>
             <AlertDialogAction
-              disabled={boardArchiving}
+              disabled={
+                listDeleting ||
+                !listDeleteConfirm ||
+                (board.lists.find(
+                  (list) => list.id === listDeleteConfirm.listId
+                )?.cards.length ?? 0) > 0
+              }
               onClick={(event) => {
                 event.preventDefault();
-                void setBoardArchived(true);
+                void confirmDeleteList();
               }}
             >
-              {boardArchiving ? "Đang lưu trữ…" : "Xác nhận lưu trữ"}
+              {listDeleting ? "Đang xóa…" : "Xác nhận xóa"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -760,29 +835,55 @@ function ListColumn({
   onOpenCreateCardModal,
   onOpenEditCardModal,
   onRequestArchiveCard,
-  onDeleteList,
+  onRequestRenameList,
+  onRequestDeleteList,
 }: {
   list: ListDTO;
   dragDisabled: boolean;
   onOpenCreateCardModal: () => void;
   onOpenEditCardModal: (card: CardDTO) => void;
   onRequestArchiveCard: (card: CardDTO) => void;
-  onDeleteList: (listId: string) => void;
+  onRequestRenameList: () => void;
+  onRequestDeleteList: () => void;
 }) {
+  const isEmpty = list.cards.length === 0;
+
   return (
     <div className="w-72 shrink-0 rounded-xl border bg-board-column p-3 shadow-sm">
       <div className="mb-2 flex items-center justify-between gap-2">
-        <h2 className="font-display font-semibold">{list.title}</h2>
-        <div className="flex items-center gap-1">
+        <h2 className="min-w-0 flex-1 truncate font-display font-semibold">
+          {list.title}
+        </h2>
+        <div className="flex shrink-0 items-center gap-0.5">
           <Badge variant="secondary">{list.cards.length}</Badge>
           <Button
             type="button"
             size="icon"
             variant="ghost"
-            aria-label={`Xóa danh sách ${list.title}`}
-            onClick={() => onDeleteList(list.id)}
+            aria-label={`Đổi tên danh sách ${list.title}`}
+            onClick={onRequestRenameList}
           >
-            <Trash2 className="h-3.5 w-3.5 text-muted-foreground" />
+            <Pencil className="h-3.5 w-3.5 text-muted-foreground" />
+          </Button>
+          <Button
+            type="button"
+            size="icon"
+            variant="ghost"
+            aria-label={`Xóa danh sách ${list.title}`}
+            disabled={!isEmpty}
+            title={
+              isEmpty
+                ? "Xóa danh sách"
+                : "Chỉ xóa được khi danh sách trống"
+            }
+            onClick={onRequestDeleteList}
+          >
+            <Trash2
+              className={cn(
+                "h-3.5 w-3.5",
+                isEmpty ? "text-muted-foreground" : "text-muted-foreground/40"
+              )}
+            />
           </Button>
         </div>
       </div>

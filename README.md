@@ -73,7 +73,7 @@ npm run dev
 | `GET/PATCH/DELETE` | `/api/boards/:id` | Fetch / rename-archive / permanently delete |
 | `GET` | `/api/boards/:id/archived` | Fetch archived cards for archive panel |
 | `POST` | `/api/lists` | Create a list |
-| `DELETE` | `/api/lists/:id` | Delete a list |
+| `PATCH/DELETE` | `/api/lists/:id` | Rename / delete a list (delete only when empty) |
 | `POST` | `/api/cards` | Create a card |
 | `PATCH/DELETE` | `/api/cards/:id` | Edit / permanently delete a card |
 | `PATCH` | `/api/cards/:id/move` | Move a card between/within lists |
@@ -95,7 +95,8 @@ npm run dev
 ## Board UX
 
 - **Rename board** from the board header pencil control.
-- **Archive board** (with confirm) hides it from the home list; restore from “Bảng đã lưu trữ”.
+- **Archive board** only from the home board list (with confirm); restore from “Bảng đã lưu trữ”.
+- **Rename list** from the list header pencil; **delete list** requires confirm and is enabled only when the list is empty.
 - **Việc của tôi**: show only cards assigned to the current user.
 - **Sort by due date**: ascending or descending (drag-and-drop pauses while sorted/filtered).
 - **Thẻ lưu trữ**: loads archived cards in a side panel without bloating the main board query.
