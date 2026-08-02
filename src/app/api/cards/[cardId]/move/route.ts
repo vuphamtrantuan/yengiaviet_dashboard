@@ -7,6 +7,9 @@ export const dynamic = "force-dynamic";
 /**
  * Move a card within/across lists. Only active (non-archived) cards participate
  * in position recomputation for safer concurrent board edits.
+ *
+ * The moved card gets `list_id` + final `position` in one write so cross-list
+ * drops do not briefly land at a stale index.
  */
 export async function PATCH(
   request: Request,
@@ -125,25 +128,41 @@ export async function PATCH(
     destIndex,
   });
 
-  if (!sameList) {
-    const { error } = await supabase
-      .from("cards")
-      .update({ list_id: destListId })
-      .eq("id", params.cardId);
-    if (error) {
-      return NextResponse.json({ error: error.message }, { status: 500 });
-    }
+  const finalOrder = sameList ? sourceOrder : destOrder;
+  const movedPosition = finalOrder.indexOf(params.cardId);
+  if (movedPosition < 0) {
+    return NextResponse.json(
+      { error: "Không thể tính vị trí thẻ sau khi di chuyển." },
+      { status: 500 }
+    );
   }
 
-  const positionUpdates = sameList
-    ? sourceOrder.map((id, index) => ({ id, position: index }))
-    : [
-        ...sourceOrder.map((id, index) => ({ id, position: index })),
-        ...destOrder.map((id, index) => ({ id, position: index })),
-      ];
+  const { error: moveError } = await supabase
+    .from("cards")
+    .update({
+      list_id: destListId,
+      position: movedPosition,
+    })
+    .eq("id", params.cardId);
+
+  if (moveError) {
+    return NextResponse.json({ error: moveError.message }, { status: 500 });
+  }
+
+  const siblingUpdates = (sameList ? sourceOrder : [...sourceOrder, ...destOrder])
+    .filter((id) => id !== params.cardId)
+    .map((id) => {
+      const order = sameList
+        ? sourceOrder
+        : sourceOrder.includes(id)
+          ? sourceOrder
+          : destOrder;
+      return { id, position: order.indexOf(id) };
+    })
+    .filter((update) => update.position >= 0);
 
   const results = await Promise.all(
-    positionUpdates.map((update) =>
+    siblingUpdates.map((update) =>
       supabase.from("cards").update({ position: update.position }).eq("id", update.id)
     )
   );
@@ -153,5 +172,9 @@ export async function PATCH(
     return NextResponse.json({ error: failed.error.message }, { status: 500 });
   }
 
-  return NextResponse.json({ ok: true });
+  return NextResponse.json({
+    ok: true,
+    destListId,
+    destIndex: movedPosition,
+  });
 }

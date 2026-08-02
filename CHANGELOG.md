@@ -4,6 +4,13 @@ All notable changes to this project are documented here.
 
 ## [Unreleased]
 
+### Fixed
+
+- Archive actions now require a confirmation dialog to prevent misclicks.
+- Card drag-and-drop across lists: use rendered list order for drop indices,
+  avoid CSS `transform` transitions on draggable cards, and persist
+  `list_id` + final `position` atomically on the server.
+
 ### Added
 
 - **Shared workspace boards**: every authenticated user sees and uses the same
