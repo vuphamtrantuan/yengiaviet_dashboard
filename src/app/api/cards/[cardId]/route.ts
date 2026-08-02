@@ -1,9 +1,14 @@
 import { NextResponse } from "next/server";
 import {
   type MemberRow,
+  buildMemberLookup,
   toCardDTO,
 } from "@/lib/supabase";
-import { ensureBoardMembership, requireSupabaseAndMember } from "@/lib/server-auth";
+import {
+  ensureBoardExists,
+  ensureMemberExists,
+  requireSupabaseAndMember,
+} from "@/lib/server-auth";
 
 export const dynamic = "force-dynamic";
 
@@ -30,6 +35,7 @@ function normalizeOptionalDate(value: unknown): string | null {
   return datePattern.test(trimmed) ? trimmed : null;
 }
 
+/** Update card fields on a shared board. */
 export async function PATCH(
   request: Request,
   { params }: { params: { cardId: string } }
@@ -39,11 +45,11 @@ export async function PATCH(
     return authContext.errorResponse;
   }
 
-  const { supabase, member } = authContext;
+  const { supabase } = authContext;
   const body = await request.json().catch(() => ({}));
   const { data: existingCard, error: existingCardError } = await supabase
     .from("cards")
-    .select("id, list_id, start_date, due_date, assignee_member_id")
+    .select("id, list_id, start_date, due_date, assignee_member_id, archived_at")
     .eq("id", params.cardId)
     .single();
 
@@ -64,13 +70,12 @@ export async function PATCH(
     );
   }
 
-  const boardMembershipError = await ensureBoardMembership({
+  const boardExistsError = await ensureBoardExists({
     supabase,
     boardId: sourceList.board_id,
-    memberId: member.id,
   });
-  if (boardMembershipError) {
-    return boardMembershipError;
+  if (boardExistsError) {
+    return boardExistsError;
   }
 
   const data: {
@@ -97,16 +102,12 @@ export async function PATCH(
     if (body.assigneeMemberId === null || body.assigneeMemberId === "") {
       data.assignee_member_id = null;
     } else if (typeof body.assigneeMemberId === "string") {
-      const assigneeMembershipError = await ensureBoardMembership({
+      const assigneeError = await ensureMemberExists({
         supabase,
-        boardId: sourceList.board_id,
         memberId: body.assigneeMemberId,
       });
-      if (assigneeMembershipError) {
-        return NextResponse.json(
-          { error: "Người được giao việc chưa thuộc bảng này." },
-          { status: 400 }
-        );
+      if (assigneeError) {
+        return assigneeError;
       }
       data.assignee_member_id = body.assigneeMemberId;
     } else {
@@ -163,7 +164,7 @@ export async function PATCH(
     .update(data)
     .eq("id", params.cardId)
     .select(
-      "id, title, description, assignee_member_id, start_date, due_date, position, list_id, created_at, updated_at"
+      "id, title, description, assignee_member_id, start_date, due_date, position, list_id, archived_at, created_at, updated_at"
     )
     .single();
 
@@ -174,22 +175,22 @@ export async function PATCH(
     );
   }
 
-  const memberEmailById = new Map<string, string>();
-  const assigneeId = card.assignee_member_id;
-  if (assigneeId) {
-    const { data: assigneeMember, error: assigneeError } = await supabase
+  let memberLookup = buildMemberLookup([]);
+  if (card.assignee_member_id) {
+    const { data: assigneeMember } = await supabase
       .from("members")
-      .select("id, email, created_at, updated_at")
-      .eq("id", assigneeId)
+      .select("id, email, name, created_at, updated_at")
+      .eq("id", card.assignee_member_id)
       .single();
-    if (!assigneeError && assigneeMember) {
-      memberEmailById.set(assigneeId, (assigneeMember as MemberRow).email);
+    if (assigneeMember) {
+      memberLookup = buildMemberLookup([assigneeMember as MemberRow]);
     }
   }
 
-  return NextResponse.json(toCardDTO(card, memberEmailById));
+  return NextResponse.json(toCardDTO(card, memberLookup));
 }
 
+/** Permanently delete a card. Prefer archive for soft-removal UX. */
 export async function DELETE(
   _request: Request,
   { params }: { params: { cardId: string } }
@@ -199,7 +200,7 @@ export async function DELETE(
     return authContext.errorResponse;
   }
 
-  const { supabase, member } = authContext;
+  const { supabase } = authContext;
   const { data: existingCard, error: existingCardError } = await supabase
     .from("cards")
     .select("id, list_id")
@@ -223,13 +224,12 @@ export async function DELETE(
     );
   }
 
-  const boardMembershipError = await ensureBoardMembership({
+  const boardExistsError = await ensureBoardExists({
     supabase,
     boardId: sourceList.board_id,
-    memberId: member.id,
   });
-  if (boardMembershipError) {
-    return boardMembershipError;
+  if (boardExistsError) {
+    return boardExistsError;
   }
 
   const { error } = await supabase.from("cards").delete().eq("id", params.cardId);

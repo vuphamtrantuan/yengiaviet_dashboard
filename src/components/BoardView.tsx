@@ -1,7 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import Link from "next/link";
+import { useMemo, useState } from "react";
 import {
   DragDropContext,
   Draggable,
@@ -10,8 +11,51 @@ import {
   type DraggableStateSnapshot,
   type DropResult,
 } from "@hello-pangea/dnd";
-import type { BoardDTO, CardDTO, ListDTO, MemberDTO } from "@/lib/types";
+import {
+  Archive,
+  ArchiveRestore,
+  ArrowLeft,
+  CalendarClock,
+  Filter,
+  Plus,
+  Trash2,
+  UserRound,
+} from "lucide-react";
+import type {
+  ArchivedCardDTO,
+  BoardDTO,
+  CardDTO,
+  ListDTO,
+  MemberDTO,
+} from "@/lib/types";
 import { computeMove } from "@/lib/board";
+import {
+  applyCardViewFilters,
+  type TaskSortMode,
+} from "@/lib/card-filters";
+import { ApiError, fetchJson } from "@/lib/api-client";
+import { useSession } from "@/hooks/use-session";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import { Switch } from "@/components/ui/switch";
+import { Badge } from "@/components/ui/badge";
+import {
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { cn } from "@/lib/utils";
 
 type CardMutationPayload = {
   title: string;
@@ -20,6 +64,11 @@ type CardMutationPayload = {
   startDate: string | null;
   dueDate: string | null;
 };
+
+type CardModalState =
+  | { mode: "create"; listId: string }
+  | { mode: "edit"; listId: string; card: CardDTO }
+  | null;
 
 function formatDate(value: string | null): string {
   if (!value) {
@@ -34,100 +83,92 @@ function formatDate(value: string | null): string {
   return new Intl.DateTimeFormat("vi-VN").format(parsed);
 }
 
-type CardModalState =
-  | { mode: "create"; listId: string }
-  | { mode: "edit"; listId: string; card: CardDTO }
-  | null;
+function memberLabel(member: Pick<MemberDTO, "email" | "name">): string {
+  return member.name || member.email;
+}
 
 export default function BoardView({ boardId }: { boardId: string }) {
-  const [board, setBoard] = useState<BoardDTO | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const queryClient = useQueryClient();
+  const { data: sessionData } = useSession();
+  const currentMember = sessionData?.member ?? null;
+
   const [cardModalState, setCardModalState] = useState<CardModalState>(null);
-  const [memberModalOpen, setMemberModalOpen] = useState(false);
-  const [memberEmail, setMemberEmail] = useState("");
-  const [addingMember, setAddingMember] = useState(false);
+  const [myTasksOnly, setMyTasksOnly] = useState(false);
+  const [sortMode, setSortMode] = useState<TaskSortMode>("position");
+  const [archiveOpen, setArchiveOpen] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [newListTitle, setNewListTitle] = useState("");
 
-  const loadBoard = useCallback(async () => {
-    const res = await fetch(`/api/boards/${boardId}`, { cache: "no-store" });
-    if (!res.ok) {
-      const response = (await res.json().catch(() => null)) as
-        | { error?: string }
-        | null;
-      if (res.status === 401) {
-        setError("Vui lòng đăng nhập để truy cập bảng công việc.");
-      } else if (res.status === 403) {
-        setError(response?.error ?? "Bạn không có quyền truy cập bảng này.");
-      } else {
-        setError(response?.error ?? "Không tìm thấy bảng công việc.");
-      }
-      setLoading(false);
-      return;
+  const boardQuery = useQuery({
+    queryKey: ["board", boardId],
+    queryFn: () =>
+      fetchJson<BoardDTO>(`/api/boards/${boardId}`, { cache: "no-store" }),
+  });
+
+  const archivedQuery = useQuery({
+    queryKey: ["board", boardId, "archived"],
+    enabled: archiveOpen,
+    queryFn: () =>
+      fetchJson<ArchivedCardDTO[]>(`/api/boards/${boardId}/archived`, {
+        cache: "no-store",
+      }),
+  });
+
+  const board = boardQuery.data ?? null;
+
+  const visibleLists = useMemo(() => {
+    if (!board) {
+      return [];
     }
-    setBoard((await res.json()) as BoardDTO);
-    setError(null);
-    setLoading(false);
-  }, [boardId]);
 
-  useEffect(() => {
-    loadBoard();
-  }, [loadBoard]);
+    return board.lists.map((list) => ({
+      ...list,
+      cards: applyCardViewFilters({
+        cards: list.cards,
+        memberId: currentMember?.id ?? null,
+        myTasksOnly,
+        sortMode,
+      }),
+    }));
+  }, [board, currentMember?.id, myTasksOnly, sortMode]);
 
-  function updateListCards(listId: string, cards: CardDTO[]) {
-    setBoard((prev) =>
-      prev
-        ? {
-            ...prev,
-            lists: prev.lists.map((l) =>
-              l.id === listId ? { ...l, cards } : l
-            ),
-          }
-        : prev
+  function setBoardCache(updater: (prev: BoardDTO) => BoardDTO) {
+    queryClient.setQueryData<BoardDTO>(["board", boardId], (prev) =>
+      prev ? updater(prev) : prev
     );
   }
 
-  function upsertCardInList(listId: string, updatedCard: CardDTO) {
-    setBoard((prev) =>
-      prev
-        ? {
-            ...prev,
-            lists: prev.lists.map((list) =>
-              list.id !== listId
-                ? list
-                : {
-                    ...list,
-                    cards: list.cards.map((card) =>
-                      card.id === updatedCard.id ? updatedCard : card
-                    ),
-                  }
-            ),
-          }
-        : prev
-    );
-  }
-
-  function appendMember(member: MemberDTO) {
-    setBoard((prev) => {
-      if (!prev) {
-        return prev;
-      }
-
-      if (prev.members.some((item) => item.id === member.id)) {
-        return prev;
-      }
-
-      return {
+  const addListMutation = useMutation({
+    mutationFn: (title: string) =>
+      fetchJson<ListDTO>("/api/lists", {
+        method: "POST",
+        body: JSON.stringify({ boardId, title }),
+      }),
+    onSuccess: (list) => {
+      setBoardCache((prev) => ({
         ...prev,
-        members: [...prev.members, member].sort((a, b) =>
-          a.email.localeCompare(b.email)
-        ),
-      };
-    });
-  }
+        lists: [...prev.lists, { ...list, cards: [] }],
+      }));
+      setNewListTitle("");
+    },
+  });
+
+  const deleteListMutation = useMutation({
+    mutationFn: (listId: string) =>
+      fetchJson<{ ok: boolean }>(`/api/lists/${listId}`, { method: "DELETE" }),
+    onSuccess: (_data, listId) => {
+      setBoardCache((prev) => ({
+        ...prev,
+        lists: prev.lists.filter((list) => list.id !== listId),
+      }));
+    },
+  });
 
   async function onDragEnd(result: DropResult) {
     const { source, destination, draggableId } = result;
-    if (!destination || !board) return;
+    if (!destination || !board || sortMode !== "position" || myTasksOnly) {
+      return;
+    }
     if (
       source.droppableId === destination.droppableId &&
       source.index === destination.index
@@ -135,93 +176,87 @@ export default function BoardView({ boardId }: { boardId: string }) {
       return;
     }
 
-    const sourceList = board.lists.find((l) => l.id === source.droppableId);
-    const destList = board.lists.find((l) => l.id === destination.droppableId);
+    const sourceList = board.lists.find((list) => list.id === source.droppableId);
+    const destList = board.lists.find((list) => list.id === destination.droppableId);
     if (!sourceList || !destList) return;
 
     const sameList = sourceList.id === destList.id;
     const { sourceOrder, destOrder } = computeMove({
       cardId: draggableId,
-      sourceOrder: sourceList.cards.map((c) => c.id),
-      destOrder: destList.cards.map((c) => c.id),
+      sourceOrder: sourceList.cards.map((card) => card.id),
+      destOrder: destList.cards.map((card) => card.id),
       sameList,
       destIndex: destination.index,
     });
 
-    // Optimistically reorder local state before persisting.
     const byId = new Map<string, CardDTO>();
-    board.lists.forEach((l) => l.cards.forEach((c) => byId.set(c.id, c)));
+    board.lists.forEach((list) =>
+      list.cards.forEach((card) => byId.set(card.id, card))
+    );
 
-    setBoard((prev) => {
-      if (!prev) return prev;
-      return {
-        ...prev,
-        lists: prev.lists.map((l) => {
-          if (l.id === sourceList.id) {
-            return {
-              ...l,
-              cards: sourceOrder.map((id, i) => ({
-                ...(byId.get(id) as CardDTO),
-                listId: sourceList.id,
-                position: i,
-              })),
-            };
-          }
-          if (!sameList && l.id === destList.id) {
-            return {
-              ...l,
-              cards: destOrder.map((id, i) => ({
-                ...(byId.get(id) as CardDTO),
-                listId: destList.id,
-                position: i,
-              })),
-            };
-          }
-          return l;
-        }),
-      };
-    });
-
-    await fetch(`/api/cards/${draggableId}/move`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        destListId: destList.id,
-        destIndex: destination.index,
+    setBoardCache((prev) => ({
+      ...prev,
+      lists: prev.lists.map((list) => {
+        if (list.id === sourceList.id) {
+          return {
+            ...list,
+            cards: sourceOrder.map((id, index) => ({
+              ...(byId.get(id) as CardDTO),
+              listId: sourceList.id,
+              position: index,
+            })),
+          };
+        }
+        if (!sameList && list.id === destList.id) {
+          return {
+            ...list,
+            cards: destOrder.map((id, index) => ({
+              ...(byId.get(id) as CardDTO),
+              listId: destList.id,
+              position: index,
+            })),
+          };
+        }
+        return list;
       }),
-    });
-  }
+    }));
 
-  async function addList(title: string) {
-    const res = await fetch("/api/lists", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ boardId, title }),
-    });
-    if (res.ok) {
-      const list = (await res.json()) as ListDTO;
-      setBoard((prev) =>
-        prev ? { ...prev, lists: [...prev.lists, { ...list, cards: [] }] } : prev
-      );
+    try {
+      await fetchJson(`/api/cards/${draggableId}/move`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          destListId: destList.id,
+          destIndex: destination.index,
+        }),
+      });
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Không thể di chuyển thẻ.");
+      queryClient.invalidateQueries({ queryKey: ["board", boardId] });
     }
   }
 
-  async function addCard(listId: string, payload: CardMutationPayload): Promise<boolean> {
-    const res = await fetch("/api/cards", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ listId, ...payload }),
-    });
-    if (res.ok) {
-      const card = (await res.json()) as CardDTO;
-      const list = board?.lists.find((l) => l.id === listId);
-      updateListCards(listId, [...(list?.cards ?? []), card]);
+  async function addCard(
+    listId: string,
+    payload: CardMutationPayload
+  ): Promise<boolean> {
+    try {
+      const card = await fetchJson<CardDTO>("/api/cards", {
+        method: "POST",
+        body: JSON.stringify({ listId, ...payload }),
+      });
+      setBoardCache((prev) => ({
+        ...prev,
+        lists: prev.lists.map((list) =>
+          list.id === listId
+            ? { ...list, cards: [...list.cards, card] }
+            : list
+        ),
+      }));
       return true;
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Không thể thêm thẻ.");
+      return false;
     }
-
-    const response = (await res.json().catch(() => null)) as { error?: string } | null;
-    setError(response?.error ?? "Không thể thêm thẻ công việc.");
-    return false;
   }
 
   async function updateCard(
@@ -229,166 +264,268 @@ export default function BoardView({ boardId }: { boardId: string }) {
     cardId: string,
     payload: CardMutationPayload
   ): Promise<boolean> {
-    const res = await fetch(`/api/cards/${cardId}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-
-    if (!res.ok) {
-      const response = (await res.json().catch(() => null)) as
-        | { error?: string }
-        | null;
-      setError(response?.error ?? "Không thể cập nhật thẻ công việc.");
+    try {
+      const card = await fetchJson<CardDTO>(`/api/cards/${cardId}`, {
+        method: "PATCH",
+        body: JSON.stringify(payload),
+      });
+      setBoardCache((prev) => ({
+        ...prev,
+        lists: prev.lists.map((list) =>
+          list.id !== listId
+            ? list
+            : {
+                ...list,
+                cards: list.cards.map((item) =>
+                  item.id === card.id ? card : item
+                ),
+              }
+        ),
+      }));
+      return true;
+    } catch (err) {
+      setError(
+        err instanceof ApiError ? err.message : "Không thể cập nhật thẻ."
+      );
       return false;
     }
+  }
 
-    const card = (await res.json()) as CardDTO;
-    upsertCardInList(listId, card);
-    return true;
+  async function archiveCard(cardId: string, archived: boolean) {
+    try {
+      await fetchJson<CardDTO>(`/api/cards/${cardId}/archive`, {
+        method: "PATCH",
+        body: JSON.stringify({ archived }),
+      });
+      if (archived) {
+        setBoardCache((prev) => ({
+          ...prev,
+          lists: prev.lists.map((list) => ({
+            ...list,
+            cards: list.cards.filter((card) => card.id !== cardId),
+          })),
+        }));
+      } else {
+        await queryClient.invalidateQueries({ queryKey: ["board", boardId] });
+      }
+      await queryClient.invalidateQueries({
+        queryKey: ["board", boardId, "archived"],
+      });
+      setError(null);
+    } catch (err) {
+      setError(
+        err instanceof ApiError ? err.message : "Không thể cập nhật lưu trữ."
+      );
+    }
   }
 
   async function deleteCard(listId: string, cardId: string) {
-    await fetch(`/api/cards/${cardId}`, { method: "DELETE" });
-    const list = board?.lists.find((l) => l.id === listId);
-    updateListCards(listId, (list?.cards ?? []).filter((c) => c.id !== cardId));
-  }
-
-  async function deleteList(listId: string) {
-    await fetch(`/api/lists/${listId}`, { method: "DELETE" });
-    setBoard((prev) =>
-      prev ? { ...prev, lists: prev.lists.filter((l) => l.id !== listId) } : prev
-    );
-  }
-
-  async function addMemberByEmail(): Promise<boolean> {
-    const trimmedEmail = memberEmail.trim().toLowerCase();
-    if (!trimmedEmail) {
-      setError("Vui lòng nhập email thành viên.");
-      return false;
+    try {
+      await fetchJson(`/api/cards/${cardId}`, { method: "DELETE" });
+      setBoardCache((prev) => ({
+        ...prev,
+        lists: prev.lists.map((list) =>
+          list.id === listId
+            ? {
+                ...list,
+                cards: list.cards.filter((card) => card.id !== cardId),
+              }
+            : list
+        ),
+      }));
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "Không thể xóa thẻ.");
     }
-
-    setAddingMember(true);
-    const res = await fetch(`/api/boards/${boardId}/members`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email: trimmedEmail }),
-    });
-    setAddingMember(false);
-
-    if (!res.ok) {
-      const response = (await res.json().catch(() => null)) as
-        | { error?: string }
-        | null;
-      setError(response?.error ?? "Không thể thêm thành viên.");
-      return false;
-    }
-
-    const response = (await res.json()) as { member: MemberDTO };
-    appendMember(response.member);
-    setMemberEmail("");
-    setMemberModalOpen(false);
-    setError(null);
-    return true;
   }
 
-  if (loading) return <p className="text-slate-400">Đang tải bảng công việc…</p>;
-  if (!board)
+  if (boardQuery.isLoading) {
+    return <p className="text-muted-foreground">Đang tải bảng công việc…</p>;
+  }
+
+  if (!board) {
     return (
       <div>
-        <p className="text-slate-400">{error ?? "Đã xảy ra lỗi không mong muốn."}</p>
-        <Link href="/" className="text-sky-400 hover:underline">
-          ← Quay lại danh sách bảng
-        </Link>
+        <p className="text-muted-foreground">
+          {boardQuery.error instanceof Error
+            ? boardQuery.error.message
+            : "Không tìm thấy bảng công việc."}
+        </p>
+        <Button asChild variant="link" className="px-0">
+          <Link href="/">← Quay lại danh sách bảng</Link>
+        </Button>
       </div>
     );
+  }
+
+  const dragDisabled = myTasksOnly || sortMode !== "position";
 
   return (
-    <div>
-      <div className="mb-5 flex items-center gap-3">
-        <Link href="/" className="text-sm text-slate-400 hover:text-slate-200">
-          ← Bảng công việc
-        </Link>
-        <h1 className="text-2xl font-bold tracking-tight">{board.title}</h1>
-        <button
-          type="button"
-          onClick={() => setMemberModalOpen(true)}
-          className="ml-auto rounded-lg border border-slate-700 px-3 py-1 text-xs text-slate-200 transition hover:border-slate-500"
-        >
-          + Thêm thành viên
-        </button>
-      </div>
-      <div className="mb-4 flex flex-wrap gap-2">
-        {board.members.map((member) => (
-          <span
-            key={member.id}
-            className="rounded-full bg-slate-800 px-2.5 py-1 text-xs text-slate-200"
+    <div className="animate-fade-up">
+      <div className="mb-5 flex flex-wrap items-center gap-3">
+        <Button asChild variant="ghost" size="sm">
+          <Link href="/">
+            <ArrowLeft className="h-4 w-4" />
+            Bảng
+          </Link>
+        </Button>
+        <h1 className="font-display text-2xl font-semibold tracking-tight">
+          {board.title}
+        </h1>
+        <Badge variant="secondary">Dùng chung workspace</Badge>
+
+        <div className="ml-auto flex flex-wrap items-center gap-2">
+          <div className="flex items-center gap-2 rounded-lg border bg-card px-3 py-1.5">
+            <Filter className="h-4 w-4 text-muted-foreground" />
+            <Label htmlFor="my-tasks" className="text-xs text-muted-foreground">
+              Việc của tôi
+            </Label>
+            <Switch
+              id="my-tasks"
+              checked={myTasksOnly}
+              onCheckedChange={setMyTasksOnly}
+            />
+          </div>
+
+          <Select
+            value={sortMode}
+            onValueChange={(value) => setSortMode(value as TaskSortMode)}
           >
-            {member.email}
-          </span>
-        ))}
+            <SelectTrigger className="w-[180px]">
+              <CalendarClock className="mr-2 h-4 w-4 text-muted-foreground" />
+              <SelectValue placeholder="Sắp xếp" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="position">Thứ tự bảng</SelectItem>
+              <SelectItem value="dueDateAsc">Hạn tăng dần</SelectItem>
+              <SelectItem value="dueDateDesc">Hạn giảm dần</SelectItem>
+            </SelectContent>
+          </Select>
+
+          <Button
+            type="button"
+            variant={archiveOpen ? "default" : "outline"}
+            size="icon"
+            aria-label="Xem thẻ đã lưu trữ"
+            onClick={() => setArchiveOpen((open) => !open)}
+          >
+            <Archive className="h-4 w-4" />
+          </Button>
+        </div>
       </div>
+
+      {dragDisabled ? (
+        <p className="mb-3 text-xs text-muted-foreground">
+          Kéo thả tạm tắt khi đang lọc “Việc của tôi” hoặc sắp xếp theo ngày.
+        </p>
+      ) : null}
+
       {error ? (
-        <p className="mb-4 rounded-lg border border-amber-500/40 bg-amber-500/10 p-3 text-sm text-amber-200">
+        <p className="mb-4 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900">
           {error}
         </p>
       ) : null}
 
-      <DragDropContext onDragEnd={onDragEnd}>
-        <div className="thin-scroll flex items-start gap-4 overflow-x-auto pb-4">
-          {board.lists.map((list) => (
-            <ListColumn
-              key={list.id}
-              list={list}
-              onOpenCreateCardModal={() =>
-                setCardModalState({ mode: "create", listId: list.id })
-              }
-              onOpenEditCardModal={(card) =>
-                setCardModalState({ mode: "edit", listId: list.id, card })
-              }
-              onDeleteCard={deleteCard}
-              onDeleteList={deleteList}
-            />
-          ))}
-          <AddListForm onAdd={addList} />
-        </div>
-      </DragDropContext>
+      <div className="flex gap-4">
+        <DragDropContext onDragEnd={onDragEnd}>
+          <div className="thin-scroll flex min-w-0 flex-1 items-start gap-4 overflow-x-auto pb-4">
+            {visibleLists.map((list) => (
+              <ListColumn
+                key={list.id}
+                list={list}
+                dragDisabled={dragDisabled}
+                onOpenCreateCardModal={() =>
+                  setCardModalState({ mode: "create", listId: list.id })
+                }
+                onOpenEditCardModal={(card) =>
+                  setCardModalState({ mode: "edit", listId: list.id, card })
+                }
+                onArchiveCard={(cardId) => archiveCard(cardId, true)}
+                onDeleteList={(listId) => deleteListMutation.mutate(listId)}
+              />
+            ))}
+
+            <form
+              onSubmit={(event) => {
+                event.preventDefault();
+                const trimmed = newListTitle.trim();
+                if (!trimmed || addListMutation.isPending) return;
+                addListMutation.mutate(trimmed);
+              }}
+              className="w-72 shrink-0 rounded-xl border border-dashed border-border bg-card/70 p-3"
+            >
+              <Input
+                value={newListTitle}
+                onChange={(event) => setNewListTitle(event.target.value)}
+                placeholder="+ Thêm danh sách"
+                aria-label="Thêm danh sách mới"
+                className="border-0 bg-transparent shadow-none focus-visible:ring-0"
+              />
+            </form>
+          </div>
+        </DragDropContext>
+
+        {archiveOpen ? (
+          <aside className="w-80 shrink-0 animate-fade-in rounded-xl border bg-card p-4 shadow-sm">
+            <div className="mb-3 flex items-center justify-between">
+              <h2 className="font-display font-semibold">Lưu trữ</h2>
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                onClick={() => setArchiveOpen(false)}
+              >
+                Đóng
+              </Button>
+            </div>
+            <p className="mb-3 text-xs text-muted-foreground">
+              Thẻ lưu trữ được tải riêng để bảng chính nhanh hơn.
+            </p>
+            {archivedQuery.isLoading ? (
+              <p className="text-sm text-muted-foreground">Đang tải…</p>
+            ) : !archivedQuery.data?.length ? (
+              <p className="text-sm text-muted-foreground">Chưa có thẻ lưu trữ.</p>
+            ) : (
+              <ul className="space-y-2">
+                {archivedQuery.data.map((card) => (
+                  <li
+                    key={card.id}
+                    className="rounded-lg border bg-secondary/40 p-3 text-sm"
+                  >
+                    <p className="font-medium">{card.title}</p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      {card.listTitle}
+                    </p>
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      className="mt-2"
+                      onClick={() => archiveCard(card.id, false)}
+                    >
+                      <ArchiveRestore className="h-3.5 w-3.5" />
+                      Khôi phục
+                    </Button>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </aside>
+        ) : null}
+      </div>
 
       {cardModalState ? (
         <CardDetailModal
           mode={cardModalState.mode}
           listId={cardModalState.listId}
-          boardMembers={board.members}
+          workspaceMembers={board.members}
           card={cardModalState.mode === "edit" ? cardModalState.card : null}
           onClose={() => setCardModalState(null)}
           onCreate={addCard}
           onUpdate={updateCard}
+          onArchive={(cardId) => archiveCard(cardId, true)}
           onDelete={deleteCard}
           onError={setError}
         />
-      ) : null}
-
-      {memberModalOpen ? (
-        <ModalShell title="Thêm thành viên" onClose={() => setMemberModalOpen(false)}>
-          <p className="text-sm text-slate-400">
-            Nhập email để thêm thành viên vào bảng.
-          </p>
-          <input
-            type="email"
-            value={memberEmail}
-            onChange={(event) => setMemberEmail(event.target.value)}
-            placeholder="member@company.com"
-            className="mt-3 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm outline-none focus:border-sky-500"
-          />
-          <button
-            type="button"
-            onClick={addMemberByEmail}
-            disabled={addingMember}
-            className="mt-3 w-full rounded-lg bg-sky-500 px-4 py-2 text-sm font-medium text-slate-950 transition hover:bg-sky-400 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {addingMember ? "Đang thêm…" : "Thêm thành viên"}
-          </button>
-        </ModalShell>
       ) : null}
     </div>
   );
@@ -396,54 +533,61 @@ export default function BoardView({ boardId }: { boardId: string }) {
 
 function ListColumn({
   list,
+  dragDisabled,
   onOpenCreateCardModal,
   onOpenEditCardModal,
-  onDeleteCard,
+  onArchiveCard,
   onDeleteList,
 }: {
   list: ListDTO;
+  dragDisabled: boolean;
   onOpenCreateCardModal: () => void;
   onOpenEditCardModal: (card: CardDTO) => void;
-  onDeleteCard: (listId: string, cardId: string) => void;
+  onArchiveCard: (cardId: string) => void;
   onDeleteList: (listId: string) => void;
 }) {
   return (
-    <div className="w-72 shrink-0 rounded-xl border border-slate-800 bg-slate-900/70 p-3">
-      <div className="mb-2 flex items-center justify-between">
-        <h2 className="font-semibold">{list.title}</h2>
-        <div className="flex items-center gap-2">
-          <span className="rounded-full bg-slate-800 px-2 py-0.5 text-xs text-slate-400">
-            {list.cards.length}
-          </span>
-          <button
-            onClick={() => onDeleteList(list.id)}
+    <div className="w-72 shrink-0 rounded-xl border bg-board-column p-3 shadow-sm">
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <h2 className="font-display font-semibold">{list.title}</h2>
+        <div className="flex items-center gap-1">
+          <Badge variant="secondary">{list.cards.length}</Badge>
+          <Button
+            type="button"
+            size="icon"
+            variant="ghost"
             aria-label={`Xóa danh sách ${list.title}`}
-            className="text-slate-500 hover:text-red-400"
+            onClick={() => onDeleteList(list.id)}
           >
-            ✕
-          </button>
+            <Trash2 className="h-3.5 w-3.5 text-muted-foreground" />
+          </Button>
         </div>
       </div>
 
-      <Droppable droppableId={list.id}>
+      <Droppable droppableId={list.id} isDropDisabled={dragDisabled}>
         {(provided, snapshot) => (
           <div
             ref={provided.innerRef}
             {...provided.droppableProps}
-            className={`min-h-[8px] space-y-2 rounded-lg p-1 transition ${
-              snapshot.isDraggingOver ? "bg-slate-800/60" : ""
-            }`}
+            className={cn(
+              "min-h-[8px] space-y-2 rounded-lg p-1 transition",
+              snapshot.isDraggingOver && "bg-accent/60"
+            )}
           >
             {list.cards.map((card, index) => (
-              <Draggable key={card.id} draggableId={card.id} index={index}>
+              <Draggable
+                key={card.id}
+                draggableId={card.id}
+                index={index}
+                isDragDisabled={dragDisabled}
+              >
                 {(dragProvided, dragSnapshot) => (
                   <CardPreview
-                    listId={list.id}
                     card={card}
                     dragProvided={dragProvided}
                     dragSnapshot={dragSnapshot}
                     onOpenCard={onOpenEditCardModal}
-                    onDeleteCard={onDeleteCard}
+                    onArchiveCard={onArchiveCard}
                   />
                 )}
               </Draggable>
@@ -453,31 +597,31 @@ function ListColumn({
         )}
       </Droppable>
 
-      <button
+      <Button
         type="button"
+        variant="outline"
+        className="mt-2 w-full border-dashed"
         onClick={onOpenCreateCardModal}
-        className="mt-2 w-full rounded-lg border border-dashed border-slate-700 px-3 py-2 text-sm text-slate-300 transition hover:border-slate-500 hover:text-white"
       >
-        + Thêm thẻ
-      </button>
+        <Plus className="h-4 w-4" />
+        Thêm thẻ
+      </Button>
     </div>
   );
 }
 
 function CardPreview({
-  listId,
   card,
   dragProvided,
   dragSnapshot,
   onOpenCard,
-  onDeleteCard,
+  onArchiveCard,
 }: {
-  listId: string;
   card: CardDTO;
   dragProvided: DraggableProvided;
   dragSnapshot: DraggableStateSnapshot;
   onOpenCard: (card: CardDTO) => void;
-  onDeleteCard: (listId: string, cardId: string) => void;
+  onArchiveCard: (cardId: string) => void;
 }) {
   return (
     <div
@@ -485,86 +629,60 @@ function CardPreview({
       {...dragProvided.draggableProps}
       {...dragProvided.dragHandleProps}
       onClick={() => onOpenCard(card)}
-      className={`group rounded-lg border border-slate-700 bg-slate-800 p-3 text-sm shadow-sm transition ${
-        dragSnapshot.isDragging
-          ? "border-sky-500 ring-2 ring-sky-500/40"
-          : "hover:border-slate-600"
-      }`}
+      className={cn(
+        "group cursor-pointer rounded-lg border bg-card p-3 text-sm shadow-sm transition hover:border-primary/30",
+        dragSnapshot.isDragging && "border-primary ring-2 ring-primary/20"
+      )}
     >
       <div className="flex items-start justify-between gap-2">
         <span className="font-medium">{card.title}</span>
-        <div className="flex items-center gap-2">
-          <button
-            type="button"
-            onClick={(event) => {
-              event.stopPropagation();
-              onDeleteCard(listId, card.id);
-            }}
-            aria-label={`Xóa thẻ ${card.title}`}
-            className="text-slate-500 opacity-0 transition group-hover:opacity-100 hover:text-red-400"
-          >
-            ✕
-          </button>
-        </div>
+        <Button
+          type="button"
+          size="icon"
+          variant="ghost"
+          className="h-7 w-7 opacity-0 transition group-hover:opacity-100"
+          aria-label={`Lưu trữ thẻ ${card.title}`}
+          onClick={(event) => {
+            event.stopPropagation();
+            onArchiveCard(card.id);
+          }}
+        >
+          <Archive className="h-3.5 w-3.5" />
+        </Button>
       </div>
       {card.description ? (
-        <p className="mt-1 text-xs text-slate-400">{card.description}</p>
+        <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">
+          {card.description}
+        </p>
       ) : null}
-      <div className="mt-2 space-y-1 text-xs text-slate-300">
-        <p>
-          <span className="text-slate-400">Người phụ trách:</span> {card.assigneeMemberEmail ?? "Chưa gán"}
+      <div className="mt-2 space-y-1 text-xs text-muted-foreground">
+        <p className="flex items-center gap-1">
+          <UserRound className="h-3 w-3" />
+          {card.assigneeMemberName || card.assigneeMemberEmail || "Chưa gán"}
         </p>
         <p>
-          <span className="text-slate-400">Bắt đầu:</span>{" "}
-          {formatDate(card.startDate)}
-        </p>
-        <p>
-          <span className="text-slate-400">Hạn:</span> {formatDate(card.dueDate)}
+          Hạn: {formatDate(card.dueDate)}
         </p>
       </div>
     </div>
   );
 }
 
-function AddListForm({ onAdd }: { onAdd: (title: string) => void }) {
-  const [title, setTitle] = useState("");
-
-  return (
-    <form
-      onSubmit={(e) => {
-        e.preventDefault();
-        const trimmed = title.trim();
-        if (!trimmed) return;
-        onAdd(trimmed);
-        setTitle("");
-      }}
-      className="w-72 shrink-0 rounded-xl border border-dashed border-slate-700 bg-slate-900/40 p-3"
-    >
-      <input
-        value={title}
-        onChange={(e) => setTitle(e.target.value)}
-        placeholder="+ Thêm danh sách"
-        aria-label="Thêm danh sách mới"
-        className="w-full rounded-lg bg-transparent px-2 py-1 text-sm outline-none placeholder:text-slate-400"
-      />
-    </form>
-  );
-}
-
 function CardDetailModal({
   mode,
   listId,
-  boardMembers,
+  workspaceMembers,
   card,
   onClose,
   onCreate,
   onUpdate,
+  onArchive,
   onDelete,
   onError,
 }: {
   mode: "create" | "edit";
   listId: string;
-  boardMembers: MemberDTO[];
+  workspaceMembers: MemberDTO[];
   card: CardDTO | null;
   onClose: () => void;
   onCreate: (listId: string, payload: CardMutationPayload) => Promise<boolean>;
@@ -573,13 +691,14 @@ function CardDetailModal({
     cardId: string,
     payload: CardMutationPayload
   ) => Promise<boolean>;
+  onArchive: (cardId: string) => Promise<void> | void;
   onDelete: (listId: string, cardId: string) => Promise<void> | void;
   onError: (message: string | null) => void;
 }) {
   const [title, setTitle] = useState(card?.title ?? "");
   const [description, setDescription] = useState(card?.description ?? "");
   const [assigneeMemberId, setAssigneeMemberId] = useState(
-    card?.assigneeMemberId ?? ""
+    card?.assigneeMemberId ?? "unassigned"
   );
   const [startDate, setStartDate] = useState(card?.startDate ?? "");
   const [dueDate, setDueDate] = useState(card?.dueDate ?? "");
@@ -601,7 +720,8 @@ function CardDetailModal({
     const payload: CardMutationPayload = {
       title: trimmedTitle,
       description: description.trim() || null,
-      assigneeMemberId: assigneeMemberId || null,
+      assigneeMemberId:
+        assigneeMemberId === "unassigned" ? null : assigneeMemberId,
       startDate: startDate || null,
       dueDate: dueDate || null,
     };
@@ -618,118 +738,105 @@ function CardDetailModal({
     }
   }
 
-  async function removeCard() {
-    if (!card) return;
-    await onDelete(listId, card.id);
-    onClose();
-  }
-
   return (
-    <ModalShell
-      title={mode === "create" ? "Tạo thẻ công việc" : "Chi tiết thẻ công việc"}
-      onClose={onClose}
-    >
-      <div className="space-y-3">
-        <div>
-          <label className="text-xs text-slate-400">Tiêu đề</label>
-          <input
-            value={title}
-            onChange={(event) => setTitle(event.target.value)}
-            className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm outline-none focus:border-sky-500"
-          />
-        </div>
-        <div>
-          <label className="text-xs text-slate-400">Mô tả</label>
-          <textarea
-            value={description}
-            onChange={(event) => setDescription(event.target.value)}
-            rows={3}
-            className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm outline-none focus:border-sky-500"
-          />
-        </div>
-        <div>
-          <label className="text-xs text-slate-400">Người phụ trách</label>
-          <select
-            value={assigneeMemberId}
-            onChange={(event) => setAssigneeMemberId(event.target.value)}
-            className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm outline-none focus:border-sky-500"
-          >
-            <option value="">Chưa giao</option>
-            {boardMembers.map((member) => (
-              <option key={member.id} value={member.id}>
-                {member.email}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div className="grid grid-cols-2 gap-2">
-          <label className="text-xs text-slate-400">
-            Ngày bắt đầu
-            <input
-              type="date"
-              value={startDate}
-              onChange={(event) => setStartDate(event.target.value)}
-              className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm outline-none focus:border-sky-500"
+    <Dialog open onOpenChange={(open) => !open && onClose()}>
+      <DialogContent>
+        <DialogHeader>
+          <DialogTitle>
+            {mode === "create" ? "Tạo thẻ công việc" : "Chi tiết thẻ công việc"}
+          </DialogTitle>
+        </DialogHeader>
+
+        <div className="space-y-3">
+          <div className="space-y-2">
+            <Label htmlFor="card-title">Tiêu đề</Label>
+            <Input
+              id="card-title"
+              value={title}
+              onChange={(event) => setTitle(event.target.value)}
             />
-          </label>
-          <label className="text-xs text-slate-400">
-            Hạn hoàn thành
-            <input
-              type="date"
-              value={dueDate}
-              onChange={(event) => setDueDate(event.target.value)}
-              className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-sm outline-none focus:border-sky-500"
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="card-description">Mô tả</Label>
+            <Textarea
+              id="card-description"
+              value={description}
+              onChange={(event) => setDescription(event.target.value)}
+              rows={3}
             />
-          </label>
-        </div>
-        <div className="flex items-center gap-2">
-          {mode === "edit" ? (
-            <button
-              type="button"
-              onClick={removeCard}
-              className="rounded-lg border border-red-500/50 px-3 py-2 text-sm text-red-300 transition hover:border-red-400 hover:text-red-200"
+          </div>
+          <div className="space-y-2">
+            <Label>Người phụ trách</Label>
+            <Select
+              value={assigneeMemberId}
+              onValueChange={setAssigneeMemberId}
             >
-              Xóa thẻ
-            </button>
-          ) : null}
-          <button
-            type="button"
-            onClick={submit}
-            disabled={saving}
-            className="ml-auto rounded-lg bg-sky-500 px-4 py-2 text-sm font-medium text-slate-950 transition hover:bg-sky-400 disabled:cursor-not-allowed disabled:opacity-50"
-          >
-            {saving ? "Đang lưu…" : mode === "create" ? "Tạo thẻ" : "Lưu thay đổi"}
-          </button>
+              <SelectTrigger>
+                <SelectValue placeholder="Chưa giao" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="unassigned">Chưa giao</SelectItem>
+                {workspaceMembers.map((member) => (
+                  <SelectItem key={member.id} value={member.id}>
+                    {memberLabel(member)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-2">
+              <Label htmlFor="start-date">Ngày bắt đầu</Label>
+              <Input
+                id="start-date"
+                type="date"
+                value={startDate}
+                onChange={(event) => setStartDate(event.target.value)}
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="due-date">Hạn hoàn thành</Label>
+              <Input
+                id="due-date"
+                type="date"
+                value={dueDate}
+                onChange={(event) => setDueDate(event.target.value)}
+              />
+            </div>
+          </div>
         </div>
-      </div>
-    </ModalShell>
-  );
-}
 
-function ModalShell({
-  title,
-  onClose,
-  children,
-}: {
-  title: string;
-  onClose: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 px-4">
-      <div className="w-full max-w-lg rounded-2xl border border-slate-700 bg-slate-900 p-5 shadow-2xl">
-        <div className="mb-4 flex items-center justify-between">
-          <h3 className="text-lg font-semibold">{title}</h3>
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-md border border-slate-700 px-2 py-1 text-xs text-slate-400 transition hover:border-slate-500 hover:text-white"
-          >
-            Đóng
-          </button>
-        </div>
-        {children}
-      </div>
-    </div>
+        <DialogFooter className="gap-2 sm:gap-0">
+          {mode === "edit" && card ? (
+            <>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={async () => {
+                  await onArchive(card.id);
+                  onClose();
+                }}
+              >
+                <Archive className="h-4 w-4" />
+                Lưu trữ
+              </Button>
+              <Button
+                type="button"
+                variant="destructive"
+                onClick={async () => {
+                  await onDelete(listId, card.id);
+                  onClose();
+                }}
+              >
+                Xóa
+              </Button>
+            </>
+          ) : null}
+          <Button type="button" onClick={submit} disabled={saving}>
+            {saving ? "Đang lưu…" : mode === "create" ? "Tạo thẻ" : "Lưu"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
   );
 }

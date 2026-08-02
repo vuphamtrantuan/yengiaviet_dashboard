@@ -4,15 +4,18 @@ export interface CardDTO {
   description: string | null;
   assigneeMemberId: string | null;
   assigneeMemberEmail: string | null;
+  assigneeMemberName: string | null;
   startDate: string | null;
   dueDate: string | null;
   position: number;
   listId: string;
+  archivedAt: string | null;
 }
 
 export interface MemberDTO {
   id: string;
   email: string;
+  name: string | null;
 }
 
 export interface ListDTO {
@@ -36,4 +39,9 @@ export interface BoardSummary {
   title: string;
   createdAt: string;
   _count: { lists: number };
+}
+
+/** Archived card payload including parent list metadata for archive panel UX. */
+export interface ArchivedCardDTO extends CardDTO {
+  listTitle: string;
 }

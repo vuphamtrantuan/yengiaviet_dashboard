@@ -1,16 +1,25 @@
 import { NextResponse } from "next/server";
 import {
-  type BoardMemberRow,
+  type CardRow,
+  type ListRow,
   type MemberRow,
+  buildMemberLookup,
   toBoardDTO,
   toCardDTO,
   toListDTO,
   toMemberDTO,
 } from "@/lib/supabase";
-import { ensureBoardMembership, requireSupabaseAndMember } from "@/lib/server-auth";
+import { ensureBoardExists, requireSupabaseAndMember } from "@/lib/server-auth";
 
 export const dynamic = "force-dynamic";
 
+type NestedCard = CardRow;
+type NestedList = ListRow & { cards?: NestedCard[] | null };
+
+/**
+ * Fetch a shared board with lists, active (non-archived) cards, and all
+ * workspace members. Nested select reduces round-trips vs. sequential queries.
+ */
 export async function GET(
   _request: Request,
   { params }: { params: { boardId: string } }
@@ -20,103 +29,102 @@ export async function GET(
     return authContext.errorResponse;
   }
 
-  const { supabase, member } = authContext;
-  const boardMembershipError = await ensureBoardMembership({
+  const { supabase } = authContext;
+  const boardExistsError = await ensureBoardExists({
     supabase,
     boardId: params.boardId,
-    memberId: member.id,
   });
-  if (boardMembershipError) {
-    return boardMembershipError;
+  if (boardExistsError) {
+    return boardExistsError;
   }
 
-  const { data: board, error: boardError } = await supabase
-    .from("boards")
-    .select("id, title, created_at, updated_at")
-    .eq("id", params.boardId)
-    .single();
+  const [boardResult, membersResult] = await Promise.all([
+    supabase
+      .from("boards")
+      .select(
+        `
+        id,
+        title,
+        created_at,
+        updated_at,
+        lists (
+          id,
+          title,
+          position,
+          board_id,
+          created_at,
+          updated_at,
+          cards (
+            id,
+            title,
+            description,
+            assignee_member_id,
+            start_date,
+            due_date,
+            position,
+            list_id,
+            archived_at,
+            created_at,
+            updated_at
+          )
+        )
+      `
+      )
+      .eq("id", params.boardId)
+      .is("lists.cards.archived_at", null)
+      .order("position", { referencedTable: "lists", ascending: true })
+      .order("position", { referencedTable: "lists.cards", ascending: true })
+      .single(),
+    supabase
+      .from("members")
+      .select("id, email, name, created_at, updated_at")
+      .order("email", { ascending: true }),
+  ]);
 
-  if (boardError || !board) {
+  if (boardResult.error || !boardResult.data) {
     return NextResponse.json({ error: "Không tìm thấy bảng." }, { status: 404 });
   }
 
-  const { data: lists, error: listsError } = await supabase
-    .from("lists")
-    .select("id, title, position, board_id, created_at, updated_at")
-    .eq("board_id", params.boardId)
-    .order("position", { ascending: true });
-
-  if (listsError) {
-    return NextResponse.json({ error: listsError.message }, { status: 500 });
+  if (membersResult.error) {
+    return NextResponse.json(
+      { error: membersResult.error.message },
+      { status: 500 }
+    );
   }
 
-  const { data: boardMembers, error: boardMembersError } = await supabase
-    .from("board_members")
-    .select("board_id, member_id, created_at")
-    .eq("board_id", params.boardId);
+  const members = membersResult.data as MemberRow[];
+  const memberLookup = buildMemberLookup(members);
+  const nestedLists = (boardResult.data.lists ?? []) as NestedList[];
 
-  if (boardMembersError) {
-    return NextResponse.json({ error: boardMembersError.message }, { status: 500 });
-  }
-
-  const memberIds = boardMembers.map(
-    (boardMember: BoardMemberRow) => boardMember.member_id
-  );
-  const { data: members, error: membersError } =
-    memberIds.length === 0
-      ? { data: [] as MemberRow[], error: null }
-      : await supabase
-          .from("members")
-          .select("id, email, created_at, updated_at")
-          .in("id", memberIds);
-
-  if (membersError) {
-    return NextResponse.json({ error: membersError.message }, { status: 500 });
-  }
-
-  const memberEmailById = new Map<string, string>(
-    members.map((item: MemberRow) => [item.id, item.email])
-  );
-  const listIds = lists.map((list) => list.id);
-  const cardsByListId = new Map<string, ReturnType<typeof toCardDTO>[]>();
-
-  if (listIds.length > 0) {
-    const { data: cards, error: cardsError } = await supabase
-      .from("cards")
-      .select(
-        "id, title, description, assignee_member_id, start_date, due_date, position, list_id, created_at, updated_at"
-      )
-      .in("list_id", listIds)
-      .order("position", { ascending: true });
-
-    if (cardsError) {
-      return NextResponse.json({ error: cardsError.message }, { status: 500 });
-    }
-
-    cards.forEach((card) => {
-      const mappedCard = toCardDTO(card, memberEmailById);
-      const listCards = cardsByListId.get(mappedCard.listId) ?? [];
-      listCards.push(mappedCard);
-      cardsByListId.set(mappedCard.listId, listCards);
-    });
-  }
+  const lists = nestedLists
+    .slice()
+    .sort((a, b) => a.position - b.position)
+    .map((list) =>
+      toListDTO({
+        list,
+        cards: (list.cards ?? [])
+          .filter((card) => !card.archived_at)
+          .slice()
+          .sort((a, b) => a.position - b.position)
+          .map((card) => toCardDTO(card, memberLookup)),
+      })
+    );
 
   return NextResponse.json(
     toBoardDTO({
-      board,
-      lists: lists.map((list) =>
-        toListDTO({
-          list,
-          cards: [...(cardsByListId.get(list.id) ?? [])].sort(
-            (first, second) => first.position - second.position
-          ),
-        })
-      ),
+      board: {
+        id: boardResult.data.id,
+        title: boardResult.data.title,
+        created_at: boardResult.data.created_at,
+        updated_at: boardResult.data.updated_at,
+      },
+      lists,
       members: members.map((item) => toMemberDTO(item)),
     })
   );
 }
 
+/** Delete a shared board. Any authenticated user may delete. */
 export async function DELETE(
   _request: Request,
   { params }: { params: { boardId: string } }
@@ -126,14 +134,13 @@ export async function DELETE(
     return authContext.errorResponse;
   }
 
-  const { supabase, member } = authContext;
-  const boardMembershipError = await ensureBoardMembership({
+  const { supabase } = authContext;
+  const boardExistsError = await ensureBoardExists({
     supabase,
     boardId: params.boardId,
-    memberId: member.id,
   });
-  if (boardMembershipError) {
-    return boardMembershipError;
+  if (boardExistsError) {
+    return boardExistsError;
   }
 
   const { error } = await supabase.from("boards").delete().eq("id", params.boardId);

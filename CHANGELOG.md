@@ -6,6 +6,21 @@ All notable changes to this project are documented here.
 
 ### Added
 
+- **Shared workspace boards**: every authenticated user sees and uses the same
+  boards (no longer scoped per account via `board_members` access checks).
+- **Users management** page (`/users`) and APIs (`GET/POST /api/members`,
+  `PATCH/DELETE /api/members/:id`) for workspace-wide members with optional
+  display names.
+- **Archive feature**: `cards.archived_at` soft-archive; active board fetch
+  excludes archived cards; dedicated `GET /api/boards/:id/archived` loads the
+  archive panel on demand; `PATCH /api/cards/:id/archive` archives/restores.
+- **Task filters**: “Việc của tôi” (assignee = current user) and sort by due
+  date (asc/desc) on the board view (`src/lib/card-filters.ts` + Vitest).
+- **Bright shadcn/ui theme**: CSS variables, Radix-based UI primitives under
+  `src/components/ui/*`, Plus Jakarta Sans + Sora fonts, light sky/teal look.
+- **Faster/safer data fetching**: TanStack Query client cache, nested board
+  select + parallel members query, timeout/typed `fetchJson` helper, parallel
+  card position updates on move.
 - Initial scaffold of **TaskFlow**, a Trello-like Kanban task manager.
 - **Tech stack**: Next.js 14 (App Router), React 18, TypeScript, Prisma + SQLite,
   Tailwind CSS, `@hello-pangea/dnd`, Vitest.
@@ -38,6 +53,10 @@ All notable changes to this project are documented here.
 
 ### Changed
 
+- Board access model: authenticated users share all boards; assignees come from
+  the global members list (not per-board membership).
+- UI migrated from dark slate utilities to a bright light theme using shadcn
+  conventions (`components.json`, CSS tokens, Button/Input/Dialog/Select/…).
 - Migrated persistence from Prisma + SQLite to Supabase Postgres via
   `src/lib/supabase.ts` and rewritten API routes under `src/app/api/*`.
 - Localized user-facing web application text to Vietnamese (`lang="vi"`,
@@ -59,3 +78,4 @@ All notable changes to this project are documented here.
 - Removed Prisma runtime/schema/seed usage (`prisma/*`, `src/lib/prisma.ts`,
   Prisma scripts in `package.json`, and Prisma dependencies).
 - Removed inline in-card task detail editor in favor of popup-based details.
+- Removed per-account board isolation (membership-gated listing/access).

@@ -32,6 +32,7 @@ export interface CardRow {
   due_date: string | null;
   position: number;
   list_id: string;
+  archived_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -39,6 +40,7 @@ export interface CardRow {
 export interface MemberRow {
   id: string;
   email: string;
+  name: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -49,14 +51,18 @@ export interface BoardMemberRow {
   created_at: string;
 }
 
+export type MemberLookup = {
+  email: string;
+  name: string | null;
+};
+
 function isPlaceholderValue(value: string, placeholders: string[]): boolean {
   const normalized = value.toLowerCase();
   return placeholders.some((placeholder) => normalized.includes(placeholder));
 }
 
-export function getSupabaseServerClient():
-  | SupabaseClient
-  | null {
+/** Create a service-role Supabase client, or null when env is missing/invalid. */
+export function getSupabaseServerClient(): SupabaseClient | null {
   const url = process.env.SUPABASE_URL?.trim();
   const serviceRoleKey = process.env.SUPABASE_SERVICE_ROLE_KEY?.trim();
 
@@ -84,24 +90,28 @@ export function getSupabaseEnvErrorMessage(): string {
   return "Thiếu cấu hình SUPABASE_URL hoặc SUPABASE_SERVICE_ROLE_KEY.";
 }
 
+/** Map a card row to API DTO using an optional member lookup map. */
 export function toCardDTO(
   card: CardRow,
-  memberEmailById?: Map<string, string>
+  memberById?: Map<string, MemberLookup>
 ): CardDTO {
   const assigneeMemberId = card.assignee_member_id;
+  const assignee = assigneeMemberId
+    ? memberById?.get(assigneeMemberId)
+    : undefined;
 
   return {
     id: card.id,
     title: card.title,
     description: card.description,
     assigneeMemberId,
-    assigneeMemberEmail: assigneeMemberId
-      ? memberEmailById?.get(assigneeMemberId) ?? null
-      : null,
+    assigneeMemberEmail: assignee?.email ?? null,
+    assigneeMemberName: assignee?.name ?? null,
     startDate: card.start_date,
     dueDate: card.due_date,
     position: card.position,
     listId: card.list_id,
+    archivedAt: card.archived_at ?? null,
   };
 }
 
@@ -109,6 +119,7 @@ export function toMemberDTO(member: MemberRow): MemberDTO {
   return {
     id: member.id,
     email: member.email,
+    name: member.name ?? null,
   };
 }
 
@@ -152,4 +163,16 @@ export function toBoardDTO(params: {
     lists,
     members,
   };
+}
+
+/** Build a member id → email/name lookup map. */
+export function buildMemberLookup(
+  members: Array<Pick<MemberRow, "id" | "email" | "name">>
+): Map<string, MemberLookup> {
+  return new Map(
+    members.map((member) => [
+      member.id,
+      { email: member.email, name: member.name ?? null },
+    ])
+  );
 }

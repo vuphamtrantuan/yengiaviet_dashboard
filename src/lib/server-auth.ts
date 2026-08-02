@@ -17,6 +17,10 @@ export function isValidEmail(value: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value);
 }
 
+/**
+ * Require a configured Supabase client and a valid session cookie member.
+ * Boards are shared workspace-wide, so membership checks are not needed here.
+ */
 export async function requireSupabaseAndMember(): Promise<
   | {
       supabase: ServerSupabase;
@@ -46,7 +50,7 @@ export async function requireSupabaseAndMember(): Promise<
 
   const { data: member, error } = await supabase
     .from("members")
-    .select("id, email, created_at, updated_at")
+    .select("id, email, name, created_at, updated_at")
     .eq("id", memberId)
     .single();
 
@@ -60,20 +64,47 @@ export async function requireSupabaseAndMember(): Promise<
     };
   }
 
-  return { supabase, member };
+  return { supabase, member: member as MemberRow };
 }
 
-export async function ensureBoardMembership(params: {
+/**
+ * Ensure a board exists. All authenticated users share the same boards.
+ * Returns a 404 response when the board is missing.
+ */
+export async function ensureBoardExists(params: {
   supabase: ServerSupabase;
   boardId: string;
+}): Promise<NextResponse | null> {
+  const { supabase, boardId } = params;
+  const { data, error } = await supabase
+    .from("boards")
+    .select("id")
+    .eq("id", boardId)
+    .maybeSingle();
+
+  if (error) {
+    return NextResponse.json({ error: error.message }, { status: 500 });
+  }
+
+  if (!data) {
+    return NextResponse.json({ error: "Không tìm thấy bảng." }, { status: 404 });
+  }
+
+  return null;
+}
+
+/**
+ * Ensure an assignee exists in the shared workspace members table.
+ */
+export async function ensureMemberExists(params: {
+  supabase: ServerSupabase;
   memberId: string;
 }): Promise<NextResponse | null> {
-  const { supabase, boardId, memberId } = params;
+  const { supabase, memberId } = params;
   const { data, error } = await supabase
-    .from("board_members")
-    .select("board_id")
-    .eq("board_id", boardId)
-    .eq("member_id", memberId)
+    .from("members")
+    .select("id")
+    .eq("id", memberId)
     .maybeSingle();
 
   if (error) {
@@ -82,8 +113,8 @@ export async function ensureBoardMembership(params: {
 
   if (!data) {
     return NextResponse.json(
-      { error: "Bạn không có quyền truy cập bảng này." },
-      { status: 403 }
+      { error: "Không tìm thấy thành viên được giao việc." },
+      { status: 400 }
     );
   }
 

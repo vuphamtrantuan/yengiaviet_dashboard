@@ -13,6 +13,7 @@ create table if not exists public.boards (
 create table if not exists public.members (
   id uuid primary key default gen_random_uuid(),
   email text not null unique,
+  name text,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
@@ -42,6 +43,7 @@ create table if not exists public.cards (
   due_date date,
   position integer not null,
   list_id uuid not null references public.lists(id) on delete cascade,
+  archived_at timestamptz,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   constraint cards_due_after_start check (
@@ -54,10 +56,22 @@ create table if not exists public.cards (
 alter table public.cards
 add column if not exists assignee_member_id uuid;
 
+alter table public.cards
+add column if not exists archived_at timestamptz;
+
+alter table public.members
+add column if not exists name text;
+
 create index if not exists lists_board_id_idx on public.lists(board_id);
 create index if not exists cards_list_id_idx on public.cards(list_id);
 create index if not exists board_members_member_id_idx on public.board_members(member_id);
 create index if not exists cards_assignee_member_id_idx on public.cards(assignee_member_id);
+create index if not exists cards_active_list_id_idx
+  on public.cards(list_id)
+  where archived_at is null;
+create index if not exists cards_archived_at_idx
+  on public.cards(archived_at)
+  where archived_at is not null;
 
 do $$
 begin

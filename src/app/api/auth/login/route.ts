@@ -13,6 +13,7 @@ import {
 
 export const dynamic = "force-dynamic";
 
+/** Email-only login: upsert workspace member and set session cookie. */
 export async function POST(request: Request) {
   const supabase = getSupabaseServerClient();
   if (!supabase) {
@@ -35,18 +36,14 @@ export async function POST(request: Request) {
   const { data: member, error } = await supabase
     .from("members")
     .upsert({ email }, { onConflict: "email" })
-    .select("id, email, created_at, updated_at")
+    .select("id, email, name, created_at, updated_at")
     .single();
 
   if (error || !member) {
-    const message =
-      error?.message?.includes("public.members")
-        ? "Cơ sở dữ liệu chưa có bảng members. Vui lòng chạy lại supabase/schema.sql mới nhất."
-        : error?.message ?? "Không thể đăng nhập.";
-    return NextResponse.json(
-      { error: message },
-      { status: 500 }
-    );
+    const message = error?.message?.includes("public.members")
+      ? "Cơ sở dữ liệu chưa có bảng members. Vui lòng chạy lại supabase/schema.sql mới nhất."
+      : error?.message ?? "Không thể đăng nhập.";
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 
   cookies().set(SESSION_COOKIE_NAME, member.id, {
